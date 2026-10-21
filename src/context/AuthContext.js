@@ -1,0 +1,81 @@
+import { jsx as _jsx } from "react/jsx-runtime";
+import { onAuthStateChanged, signOut as fbSignOut } from 'firebase/auth';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import { subscribeDevice } from '../lib/api';
+const AuthContext = createContext(undefined);
+export function AuthProvider({ children }) {
+    const [loading, setLoading] = useState(true);
+    const [firebaseUser, setFirebaseUser] = useState(null);
+    const [profile, setProfile] = useState(null);
+    const [device, setDevice] = useState(null);
+    const [deviceLoading, setDeviceLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const loadProfile = useCallback(async (user) => {
+        if (!user) {
+            setProfile(null);
+            setDevice(null);
+            return;
+        }
+        try {
+            const snapshot = await getDoc(doc(db, 'users', user.uid));
+            if (snapshot.exists()) {
+                setProfile(snapshot.data());
+                setError(null);
+            }
+            else {
+                setProfile(null);
+                setError('Your account is not provisioned yet. Contact the administrator.');
+                await fbSignOut(auth);
+            }
+        }
+        catch (e) {
+            setError(e instanceof Error ? e.message : 'Could not load your profile.');
+        }
+    }, []);
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            setFirebaseUser(user);
+            await loadProfile(user);
+            setLoading(false);
+        });
+        return unsubscribe;
+    }, [loadProfile]);
+    useEffect(() => {
+        if (!profile || profile.role !== 'teacher') {
+            setDevice(null);
+            setDeviceLoading(false);
+            return undefined;
+        }
+        setDeviceLoading(true);
+        const unsubscribe = subscribeDevice(profile.uid, (record) => {
+            setDevice(record);
+            setDeviceLoading(false);
+        }, () => setDeviceLoading(false));
+        return unsubscribe;
+    }, [profile]);
+    const signOut = useCallback(async () => {
+        setProfile(null);
+        setDevice(null);
+        await fbSignOut(auth);
+    }, []);
+    const value = useMemo(() => ({
+        loading,
+        profile,
+        firebaseUser,
+        device,
+        deviceLoading,
+        error,
+        refreshProfile: () => loadProfile(auth.currentUser),
+        signOut
+    }), [loading, profile, firebaseUser, device, deviceLoading, error, loadProfile, signOut]);
+    return _jsx(AuthContext.Provider, { value: value, children: children });
+}
+export function useAuth() {
+    const context = useContext(AuthContext);
+    if (!context) {
+        throw new Error('useAuth must be used inside AuthProvider');
+    }
+    return context;
+}
