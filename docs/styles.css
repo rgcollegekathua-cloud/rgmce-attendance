@@ -179,11 +179,6 @@ input[type="text"]:focus {
   margin: 0 0 4px;
 }
 
-.confirm-id {
-  margin: 0;
-  color: var(--muted);
-}
-
 .home-head {
   margin-bottom: 14px;
 }

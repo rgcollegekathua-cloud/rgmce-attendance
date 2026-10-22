@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:rules": "node scripts/test-rules.mjs",
-    "test:all": "npm run test && npm run test:functions && npm run test:rules",
+    "test:appscript": "node --test \"apps-script/test/*.test.mjs\"",
+    "test:all": "npm run test && npm run test:functions && npm run test:rules && npm run test:appscript",
     "test:functions": "npm --prefix functions run test"
   },
   "dependencies": {

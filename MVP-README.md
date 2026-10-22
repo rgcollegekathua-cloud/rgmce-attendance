@@ -14,13 +14,42 @@ Nothing was deleted. The MVP is completely separate and does not use them.
 
 1. Teacher opens the app and enters their Teacher ID once.
 2. Backend checks the ID against the private Teachers sheet and returns the name.
-3. Teacher confirms the name. The ID is saved in the phone browser.
-4. Two big buttons: **MARK ARRIVAL** and **MARK DEPARTURE**.
-5. Tapping a button asks for one GPS reading, checks it is within the college
-   radius (default 100 m), then sends the request.
+3. Teacher confirms the name. The ID is saved in the phone browser and is never
+   shown on screen again.
+4. Three big buttons: **MARK ARRIVAL**, **MARK DEPARTURE** and **MARK LEAVE**.
+5. Tapping Arrival or Departure asks for one GPS reading, checks it is within the
+   college radius (default 200 m), then sends the request. Leave needs no location.
 6. Apps Script writes the row in Google Sheets with a server-generated time
-   (Asia/Kolkata). Duplicate arrival/departure, departure-before-arrival and
-   inactive teachers are rejected on the server.
+   (Asia/Kolkata). Duplicate arrival/departure/leave, departure-before-arrival,
+   leave-after-attendance, attendance-after-leave, out-of-hours marking and
+   inactive teachers are all rejected on the server.
+
+## Rules enforced on the server
+
+| Rule | Behaviour |
+|---|---|
+| Opening hours | The college opens at 8:00 AM and closes at 3:00 PM IST |
+| Arrival / Departure hours | 08:00–14:59 IST only (server clock, not the phone clock) |
+| Leave hours | 08:00–14:59 IST only, same window as arrival and departure |
+| Button states before arrival | Arrival and Leave are enabled inside the window, Departure is disabled |
+| Button states after arrival | Arrival and Leave are disabled, only Departure stays enabled |
+| Button states after 3 PM | Arrival, Departure and Leave are all disabled; they come back at 8:00 AM the next day |
+| Arrival before Departure | Departure is rejected until arrival exists for that day |
+| One action per day | A second Arrival, Departure or Leave is rejected with a clear message |
+| Leave vs Attendance | Leave is rejected if attendance already exists, and vice versa |
+| Late marking | There is none — every arrival is recorded as `On time` |
+| Teacher ID privacy | Kept internally only; never rendered in the frontend |
+
+The frontend never trusts the phone's clock. It takes the server's clock offset
+from the `date` and `serverTime` fields of the `today` response (falling back to
+the server's `attendanceOpen` flag), so a wrong phone clock or timezone cannot
+enable an action the server would reject. The page keeps that offset and
+refreshes it every minute, so the buttons switch themselves off at 3:00 PM and
+come back at 8:00 AM the next day even if the page is left open.
+
+The college location comes from the server only. If it cannot be loaded there is
+no guessed fallback position: Arrival and Departure stay disabled with a clear
+message, while Leave keeps working because it needs no location.
 
 ## Security limits of this MVP (please read)
 
@@ -36,9 +65,10 @@ Nothing was deleted. The MVP is completely separate and does not use them.
 |---|---|
 | `docs/index.html` | The app page (served by GitHub Pages) |
 | `docs/styles.css` | Mobile-friendly styling |
-| `docs/app.js` | Teacher ID flow, GPS check, submit to Apps Script |
+| `docs/app.js` | Teacher ID flow, GPS check, action buttons |
 | `apps-script/Code.gs` | The whole backend — paste into Google Apps Script |
 | `apps-script/test/logic.test.mjs` | Local tests for the backend rules |
+| `apps-script/test/frontend.test.mjs` | Local tests for the frontend button states and privacy |
 | `DEPLOYMENT.md` | Step-by-step setup guide |
 
 ## Spreadsheet layout (created automatically by `setup()`)
@@ -48,17 +78,24 @@ Nothing was deleted. The MVP is completely separate and does not use them.
 **Attendance sheet:** `Teacher ID | Teacher Name | Date | Arrival Time | Departure Time | Arrival Latitude | Arrival Longitude | Departure Latitude | Departure Longitude | Status | Hours Worked`
 
 One row per teacher per date. Arrival creates the row, departure updates it.
+Raw history is never rewritten.
+
+**Leaves sheet:** `Teacher ID | Teacher Name | Date | Leave Time | Marked At`
 
 **Config sheet:** `Key | Value` with `COLLEGE_LAT`, `COLLEGE_LNG`, `RADIUS_M`,
-`LATE_AFTER`, `MAX_ACCURACY_M`. Edit these values directly in the sheet —
-no code change needed. Use placeholder coordinates until you set the real ones.
+`MAX_ACCURACY_M`. Edit these values directly in the sheet — no code change
+needed. The defaults already point at the college campus. Older sheets may still
+contain a `LATE_AFTER` row; it is unused now and `setup()` removes it.
 
 ## Local checks that were run
 
 - `node --check` on `docs/app.js` and `apps-script/Code.gs` — pass
-- `node --test apps-script/test/logic.test.mjs` — 14/14 pass (identify rules,
-  arrival creation, duplicate rejection, late status, hours worked,
-  departure-before-arrival, inactive teacher, invalid coordinates, lock release)
+- `npm run test:appscript` — 44/44 pass (identify rules, arrival/departure/leave
+  creation and duplicates, out-of-hours rejection for all three actions,
+  leave/attendance conflicts, server-time state, Date-object rows, config
+  cleanup, frontend button states and Teacher ID privacy)
+- An end-to-end run of the real backend and frontend against a mocked
+  spreadsheet and browser — 78/78 checks pass
 - Existing React project checks (`npm run typecheck`, `npm run lint`,
   `npm run build`) still pass — they were not touched.
 

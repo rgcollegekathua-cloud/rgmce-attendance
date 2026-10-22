@@ -20,8 +20,7 @@
     </section>
 
     <section id="view-id" class="card hidden">
-      <h2>Enter your Teacher ID</h2>
-      <p class="hint">Use the ID given to you by the college admin.</p>
+      <h2>Enter Teacher ID</h2>
       <form id="id-form" autocomplete="off">
         <input
           id="teacher-id-input"
@@ -30,7 +29,6 @@
           autocapitalize="characters"
           autocomplete="off"
           spellcheck="false"
-          placeholder="e.g. T001"
           required
         />
         <button type="submit" id="id-submit" class="btn btn-primary">Continue</button>
@@ -41,7 +39,6 @@
       <h2>Is this you?</h2>
       <div class="confirm-box">
         <p class="confirm-name" id="confirm-name"></p>
-        <p class="confirm-id" id="confirm-id"></p>
       </div>
       <button id="confirm-yes" class="btn btn-primary">Yes, continue</button>
       <button id="confirm-no" class="btn btn-secondary">No, change ID</button>
@@ -50,7 +47,7 @@
     <section id="view-home" class="card hidden">
       <div class="home-head">
         <p class="home-name" id="home-name"></p>
-        <p class="home-meta"><span id="home-id"></span> &middot; <span id="home-date"></span></p>
+        <p class="home-meta"><span id="home-date"></span></p>
       </div>
 
       <div class="status-card" id="status-card">
@@ -74,6 +71,7 @@
 
       <button id="btn-arrival" class="btn btn-arrival">MARK ARRIVAL</button>
       <button id="btn-departure" class="btn btn-departure">MARK DEPARTURE</button>
+      <button id="btn-leave" class="btn btn-secondary">MARK LEAVE</button>
 
       <button id="btn-change" class="btn-link">Change Teacher ID</button>
     </section>
@@ -88,10 +86,7 @@
   <div id="message" class="message hidden" role="status" aria-live="polite"></div>
 
   <footer class="site-footer">
-    <p id="security-note">
-      Location is checked on this phone before sending. Browser location can be faked;
-      this app is a convenience aid, not proof of identity.
-    </p>
+    <p id="security-note"></p>
   </footer>
 
   <script src="app.js"></script>

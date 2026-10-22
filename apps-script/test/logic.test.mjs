@@ -27,6 +27,11 @@ function formatDateMock(date, tz, fmt) {
   const ss = fmtPart(date, tz, "second");
   if (fmt === "yyyy-MM-dd") return `${y}-${m}-${d}`;
   if (fmt === "HH:mm:ss") return `${hh}:${mm}:${ss}`;
+  if (fmt === "HH:mm") return `${hh}:${mm}`;
+  if (fmt === "HH") return hh;
+  if (fmt === "mm") return mm;
+  if (fmt === "H") return String(parseInt(hh, 10));
+  if (fmt === "m") return String(parseInt(mm, 10));
   throw new Error("Unsupported format in mock: " + fmt);
 }
 
@@ -35,11 +40,20 @@ class MockSheet {
     this.name = name;
     this.data = data.map((r) => r.slice());
   }
+  getName() { return this.name; }
+  getSheetId() { return 1; }
   getLastRow() { return this.data.length; }
+  clearContents() { this.data = []; }
+  clearFormats() { return this; }
+  setFrozenRows() { return this; }
+  autoResizeColumns() { return this; }
+  deleteRow(row) { this.data.splice(row - 1, 1); return this; }
+  appendRow(row) { this.data.push(row.slice()); }
   getRange(row, col, numRows, numCols) {
     const h = numRows == null ? 1 : numRows;
     const w = numCols == null ? 1 : numCols;
     const sheet = this;
+    const chain = { merge() { return chain; }, setFontWeight() { return chain; }, setFontSize() { return chain; }, setHorizontalAlignment() { return chain; }, setBorder() { return chain; } };
     return {
       getValues() {
         const out = [];
@@ -53,6 +67,7 @@ class MockSheet {
       setValue(v) {
         if (!sheet.data[row - 1]) sheet.data[row - 1] = [];
         sheet.data[row - 1][col - 1] = v;
+        return chain;
       },
       setValues(vals) {
         vals.forEach((r, i) => {
@@ -61,18 +76,24 @@ class MockSheet {
             sheet.data[row - 1 + i][col - 1 + j] = v;
           });
         });
-      }
+        return chain;
+      },
+      merge() { return chain; },
+      setFontWeight() { return chain; },
+      setFontSize() { return chain; },
+      setHorizontalAlignment() { return chain; },
+      setBorder() { return chain; }
     };
   }
-  appendRow(row) { this.data.push(row.slice()); }
 }
 
-function makeContext({ nowIso, teachers, attendance, config }) {
+function makeContext({ nowIso, teachers, attendance, config, leaves }) {
   const now = new Date(nowIso);
   const sheets = {
     Teachers: new MockSheet("Teachers", teachers),
     Attendance: new MockSheet("Attendance", attendance),
-    Config: new MockSheet("Config", config)
+    Config: new MockSheet("Config", config),
+    Leaves: new MockSheet("Leaves", leaves || [["Teacher ID", "Teacher Name", "Date", "Leave Time", "Marked At"]])
   };
   const lock = {
     waitCalls: 0,
@@ -97,11 +118,20 @@ function makeContext({ nowIso, teachers, attendance, config }) {
     SpreadsheetApp: {
       openById: () => ({
         getSheetByName: (name) => sheets[name] || null,
-        getUrl: () => "https://example.invalid/sheet"
+        insertSheet: (name) => { sheets[name] = new MockSheet(name, []); return sheets[name]; },
+        getUrl: () => "https://example.invalid/sheet",
+        getSheetId: () => 1
       })
     },
     LockService: { getScriptLock: () => lock },
-    Utilities: { formatDate: formatDateMock },
+    Utilities: {
+      formatDate(date, tz, pattern) {
+        if (pattern === "yyyy-MM-dd HH:mm:ss") {
+          return formatDateMock(date, tz, "yyyy-MM-dd") + " " + formatDateMock(date, tz, "HH:mm:ss");
+        }
+        return formatDateMock(date, tz, pattern);
+      }
+    },
     ContentService: {
       MimeType: { JSON: "application/json" },
       createTextOutput(text) {
@@ -139,6 +169,16 @@ const CONFIG_SHEET = [
   ["COLLEGE_LAT", 32.7],
   ["COLLEGE_LNG", 75.3],
   ["RADIUS_M", 100],
+  ["MAX_ACCURACY_M", 150]
+];
+
+// Older installations still carry this row. The app ignores it and setup()
+// removes it.
+const CONFIG_SHEET_WITH_LEGACY_KEY = [
+  ["Key", "Value"],
+  ["COLLEGE_LAT", 32.7],
+  ["COLLEGE_LNG", 75.3],
+  ["RADIUS_M", 100],
   ["LATE_AFTER", "10:00"],
   ["MAX_ACCURACY_M", 150]
 ];
@@ -148,17 +188,42 @@ function fresh(overrides = {}) {
     nowIso: overrides.nowIso || "2026-10-21T08:59:30+05:30",
     teachers: overrides.teachers || TEACHERS,
     attendance: overrides.attendance || [ATTENDANCE_HEADER.slice()],
-    config: overrides.config || CONFIG_SHEET
+    config: overrides.config || CONFIG_SHEET,
+    leaves: overrides.leaves
   });
 }
 
-test("config endpoint returns college settings", () => {
+test("config endpoint returns college settings without a late threshold", () => {
   const ctx = fresh();
   const res = call(ctx, { action: "config" });
   assert.equal(res.ok, true);
   assert.equal(res.collegeLat, 32.7);
   assert.equal(res.radiusM, 100);
-  assert.equal(res.lateAfter, "10:00");
+  assert.equal(res.lateAfter, undefined);
+});
+
+test("config endpoint ignores a leftover LATE_AFTER row", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_WITH_LEGACY_KEY });
+  const res = call(ctx, { action: "config" });
+  assert.equal(res.ok, true);
+  assert.equal(res.lateAfter, undefined);
+  assert.equal(res.maxAccuracyM, 150);
+});
+
+test("setup removes the unused LATE_AFTER config row", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_WITH_LEGACY_KEY });
+  ctx.setup("SPREAD123");
+  const keys = ctx._sheets.Config.data.slice(1).map((row) => String(row[0]).trim());
+  assert.ok(!keys.includes("LATE_AFTER"), "LATE_AFTER row must be removed");
+  assert.ok(keys.includes("COLLEGE_LAT"), "other config rows must be kept");
+  assert.equal(ctx._sheets.Teachers.data.length, TEACHERS.length, "teachers must not be touched");
+});
+
+test("setup keeps a config sheet that has no unused rows", () => {
+  const ctx = fresh();
+  ctx.setup("SPREAD123");
+  const keys = ctx._sheets.Config.data.slice(1).map((row) => String(row[0]).trim());
+  assert.deepEqual(keys, ["COLLEGE_LAT", "COLLEGE_LNG", "RADIUS_M", "MAX_ACCURACY_M"]);
 });
 
 test("identify accepts active teacher, rejects unknown and inactive", () => {
@@ -198,11 +263,11 @@ test("duplicate arrival is rejected and original time is kept", () => {
   assert.equal(ctx._sheets.Attendance.data[1][3], "08:59:30");
 });
 
-test("late arrival after LATE_AFTER is marked Late", () => {
-  const ctx = fresh({ nowIso: "2026-10-21T10:15:00+05:30" });
+test("status is always On time because there is no late policy", () => {
+  const ctx = fresh({ nowIso: "2026-10-21T14:59:00+05:30" });
   const res = call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
   assert.equal(res.ok, true);
-  assert.equal(ctx._sheets.Attendance.data[1][9], "Late");
+  assert.equal(ctx._sheets.Attendance.data[1][9], "On time");
 });
 
 test("departure updates the same row and computes hours worked", () => {
@@ -222,11 +287,11 @@ test("departure updates the same row and computes hours worked", () => {
 });
 
 test("hours worked spans multiple hours", () => {
-  const ctx = fresh({ nowIso: "2026-10-21T16:30:00+05:30" });
+  const ctx = fresh({ nowIso: "2026-10-21T14:30:00+05:30" });
   call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
-  ctx._sheets.Attendance.data[1][3] = "09:00:00";
+  ctx._sheets.Attendance.data[1][3] = "08:00:00";
   const dep = call(ctx, { action: "mark", teacherId: "T001", type: "departure", lat: 32.7, lng: 75.3 });
-  assert.equal(dep.hoursWorked, 7.5);
+  assert.equal(dep.hoursWorked, 6.5);
 });
 
 test("departure without arrival is rejected", () => {
@@ -237,7 +302,7 @@ test("departure without arrival is rejected", () => {
 });
 
 test("duplicate departure is rejected", () => {
-  const ctx = fresh({ nowIso: "2026-10-21T17:00:00+05:30" });
+  const ctx = fresh({ nowIso: "2026-10-21T14:30:00+05:30" });
   call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
   call(ctx, { action: "mark", teacherId: "T001", type: "departure", lat: 32.7, lng: 75.3 });
   const again = call(ctx, { action: "mark", teacherId: "T001", type: "departure", lat: 32.7, lng: 75.3 });
@@ -274,6 +339,153 @@ test("lock is released even when the request fails", () => {
   call(ctx, { action: "mark", teacherId: "NOPE", type: "arrival", lat: 32.7, lng: 75.3 });
   assert.equal(ctx._lock.waitCalls, 1);
   assert.equal(ctx._lock.releaseCalls, 1);
+});
+
+test("arrival is rejected before 8:00 AM and from 3:00 PM onwards", () => {
+  const early = fresh({ nowIso: "2026-10-21T07:59:00+05:30" });
+  const earlyRes = call(early, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(earlyRes.ok, false);
+  assert.match(earlyRes.error, /8:00 AM and 3:00 PM/i);
+
+  const late = fresh({ nowIso: "2026-10-21T15:00:00+05:30" });
+  const lateRes = call(late, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(lateRes.ok, false);
+  assert.match(lateRes.error, /8:00 AM and 3:00 PM/i);
+
+  const edge = fresh({ nowIso: "2026-10-21T08:00:00+05:30" });
+  assert.equal(call(edge, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 }).ok, true);
+});
+
+test("leave is allowed inside working hours and does not require location", () => {
+  const ctx = fresh({ nowIso: "2026-10-21T09:00:00+05:30" });
+  const res = call(ctx, { action: "leave", teacherId: "T001" });
+  assert.equal(res.ok, true);
+  assert.equal(res.type, "leave");
+  assert.equal(res.time, "09:00:00");
+  const row = ctx._sheets.Leaves.data[1];
+  assert.equal(row[0], "T001");
+  assert.equal(row[1], "Dr Asha Sharma");
+  assert.equal(row[2], "2026-10-21");
+  assert.equal(row[3], "09:00:00");
+  assert.equal(row[4], "2026-10-21 09:00:00");
+});
+
+test("leave is rejected outside working hours", () => {
+  const evening = fresh({ nowIso: "2026-10-21T18:30:00+05:30" });
+  const res = call(evening, { action: "leave", teacherId: "T001" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /8:00 AM and 3:00 PM/i);
+  assert.equal(evening._sheets.Leaves.data.length, 1, "no leave row may be written");
+
+  const early = fresh({ nowIso: "2026-10-21T07:30:00+05:30" });
+  const earlyRes = call(early, { action: "leave", teacherId: "T001" });
+  assert.equal(earlyRes.ok, false);
+  assert.match(earlyRes.error, /8:00 AM and 3:00 PM/i);
+
+  const edge = fresh({ nowIso: "2026-10-21T14:59:00+05:30" });
+  assert.equal(call(edge, { action: "leave", teacherId: "T001" }).ok, true);
+
+  const closing = fresh({ nowIso: "2026-10-21T15:00:00+05:30" });
+  assert.equal(call(closing, { action: "leave", teacherId: "T001" }).ok, false);
+});
+
+test("a leave that already exists is reported before the working hours check", () => {
+  const ctx = fresh({
+    nowIso: "2026-10-21T16:00:00+05:30",
+    leaves: [
+      ["Teacher ID", "Teacher Name", "Date", "Leave Time", "Marked At"],
+      ["T001", "Dr Asha Sharma", "2026-10-21", "09:00:00", "2026-10-21 09:00:00"]
+    ]
+  });
+  const res = call(ctx, { action: "leave", teacherId: "T001" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /already been recorded/i);
+});
+
+test("duplicate leave on the same day is rejected", () => {
+  const ctx = fresh();
+  assert.equal(call(ctx, { action: "leave", teacherId: "T001" }).ok, true);
+  const second = call(ctx, { action: "leave", teacherId: "T001" });
+  assert.equal(second.ok, false);
+  assert.match(second.error, /already been recorded/i);
+  assert.equal(ctx._sheets.Leaves.data.length, 2);
+});
+
+test("leave is rejected when attendance already exists", () => {
+  const ctx = fresh();
+  call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  const res = call(ctx, { action: "leave", teacherId: "T001" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /cannot mark leave after arrival or departure/i);
+});
+
+test("attendance is rejected when leave was already recorded", () => {
+  const ctx = fresh();
+  call(ctx, { action: "leave", teacherId: "T001" });
+  const res = call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /leave has already been recorded/i);
+});
+
+test("inactive teacher cannot record leave", () => {
+  const ctx = fresh();
+  const res = call(ctx, { action: "leave", teacherId: "T002" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /inactive/i);
+});
+
+test("today reports server time and attendance window", () => {
+  const open = fresh({ nowIso: "2026-10-21T09:00:00+05:30" });
+  const openRes = call(open, { action: "today", teacherId: "T001" });
+  assert.equal(openRes.attendanceOpen, true);
+  assert.equal(openRes.serverTime, "09:00:00");
+  assert.equal(openRes.date, "2026-10-21");
+  assert.equal(openRes.arrivalTime, null);
+  assert.equal(openRes.departureTime, null);
+
+  const closed = fresh({ nowIso: "2026-10-21T16:00:00+05:30" });
+  assert.equal(call(closed, { action: "today", teacherId: "T001" }).attendanceOpen, false);
+});
+
+test("today reports leave state and blocks further attendance", () => {
+  const ctx = fresh();
+  call(ctx, { action: "leave", teacherId: "T001" });
+  const res = call(ctx, { action: "today", teacherId: "T001" });
+  assert.equal(res.leave, true);
+  assert.equal(res.marked, false);
+});
+
+test("today matches an existing row whose date cell is a Date object", () => {
+  const ctx = fresh({
+    attendance: [
+      ATTENDANCE_HEADER.slice(),
+      ["T001", "Dr Asha Sharma", new Date("2026-10-21T00:00:00+05:30"), "09:10:00", "", 32.7, 75.3, "", "", "On time", ""]
+    ]
+  });
+  const res = call(ctx, { action: "today", teacherId: "T001" });
+  assert.equal(res.marked, true);
+  assert.equal(res.arrivalTime, "09:10:00");
+  assert.equal(res.departureTime, null);
+});
+
+test("departure can be marked when the existing row date cell is a Date object", () => {
+  const ctx = fresh({
+    nowIso: "2026-10-21T10:00:00+05:30",
+    attendance: [
+      ATTENDANCE_HEADER.slice(),
+      ["T001", "Dr Asha Sharma", new Date("2026-10-21T00:00:00+05:30"), "09:10:00", "", 32.7, 75.3, "", "", "On time", ""]
+    ]
+  });
+  const dep = call(ctx, { action: "mark", teacherId: "T001", type: "departure", lat: 32.7, lng: 75.3 });
+  assert.equal(dep.ok, true);
+  assert.equal(ctx._sheets.Attendance.data[1][4], "10:00:00");
+});
+
+test("report action is not supported", () => {
+  const ctx = fresh();
+  const res = call(ctx, { action: "report", month: 10, year: 2026 });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /unknown action/i);
 });
 
 test("doGet reports service health", () => {
