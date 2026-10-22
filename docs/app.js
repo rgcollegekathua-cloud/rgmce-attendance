@@ -236,6 +236,7 @@ function renderToday(data){
   departureEl.textContent=data.departureTime||'-';
   hoursEl.textContent=(data.hoursWorked!=null&&data.hoursWorked!=='')?data.hoursWorked+' h':'-';
   if(data.departureTime){statusValue.textContent='Completed';statusValue.classList.add('done');}
+  else if(data.status==='Late'){statusValue.textContent='Late';statusValue.classList.add('late');}
   else{statusValue.textContent='On time';statusValue.classList.add('on-time');}
 }
 

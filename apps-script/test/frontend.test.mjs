@@ -8,11 +8,29 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const code = fs.readFileSync(path.join(here, "..", "..", "docs", "app.js"), "utf8");
 
+function makeElement(id) {
+  return {
+    id,
+    className: "",
+    textContent: "",
+    disabled: false,
+    classList: {
+      added: [],
+      add(name) { this.added.push(name); },
+      remove() {}
+    }
+  };
+}
+
 function makeButtons() {
   return {
-    "btn-arrival": { disabled: false },
-    "btn-departure": { disabled: false },
-    "btn-leave": { disabled: false }
+    "btn-arrival": { disabled: false, textContent: "" },
+    "btn-departure": { disabled: false, textContent: "" },
+    "btn-leave": { disabled: false, textContent: "" },
+    "status-value": makeElement("status-value"),
+    "arrival-time": makeElement("arrival-time"),
+    "departure-time": makeElement("departure-time"),
+    "hours-worked": makeElement("hours-worked")
   };
 }
 
@@ -211,6 +229,48 @@ test("server attendanceOpen is used instead of the device clock", () => {
     attendanceOpen: true
   });
   assert.equal(buttons["btn-departure"].disabled, false);
+});
+
+test("a late arrival is displayed as Late", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: "10:30:00",
+    departureTime: null,
+    status: "Late",
+    hoursWorked: null,
+    leave: false
+  });
+  assert.equal(buttons["status-value"].textContent, "Late");
+  assert.ok(buttons["status-value"].classList.added.includes("late"));
+});
+
+test("an on-time arrival is displayed as On time", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: "09:00:00",
+    departureTime: null,
+    status: "On time",
+    hoursWorked: null,
+    leave: false
+  });
+  assert.equal(buttons["status-value"].textContent, "On time");
+  assert.ok(buttons["status-value"].classList.added.includes("on-time"));
+});
+
+test("a finished day is displayed as Completed", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: "10:30:00",
+    departureTime: "14:00:00",
+    status: "Late",
+    hoursWorked: 3.5,
+    leave: false
+  });
+  assert.equal(buttons["status-value"].textContent, "Completed");
+  assert.equal(buttons["hours-worked"].textContent, "3.5 h");
 });
 
 test("frontend never renders the teacher id after it is entered", () => {

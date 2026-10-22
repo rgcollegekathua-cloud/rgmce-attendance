@@ -23,12 +23,9 @@ var CONFIG_DEFAULTS = [
   ["COLLEGE_LAT", 32.4017359985446],
   ["COLLEGE_LNG", 75.5026562104331],
   ["RADIUS_M", 200],
+  ["LATE_AFTER", "10:00"],
   ["MAX_ACCURACY_M", 250]
 ];
-
-// Config keys that older versions used but the app no longer reads.
-// setup() removes any row whose key is listed here.
-var REMOVED_CONFIG_KEYS = ["LATE_AFTER"];
 
 var HEADERS_TEACHERS = ["Teacher ID", "Teacher Name", "Active"];
 var HEADERS_ATTENDANCE = [
@@ -80,9 +77,7 @@ function setup(spreadsheetId) {
     teachers.appendRow(["T001", "Sample Teacher (replace me)", "yes"]);
   }
   seedConfig_(config);
-  var removed = removeUnusedConfigRows_(config);
-  return "Spreadsheet connected. Teachers: " + ss.getUrl() +
-    (removed.length ? " Removed unused Config row(s): " + removed.join(", ") + "." : "");
+  return "Spreadsheet connected. Teachers: " + ss.getUrl();
 }
 
 function handleConfig_() {
@@ -92,6 +87,7 @@ function handleConfig_() {
     collegeLat: cfg.COLLEGE_LAT,
     collegeLng: cfg.COLLEGE_LNG,
     radiusM: cfg.RADIUS_M,
+    lateAfter: minutesToTime_(minutesOfDay_(cfg.LATE_AFTER)),
     maxAccuracyM: cfg.MAX_ACCURACY_M
   };
 }
@@ -183,6 +179,7 @@ function handleMark_(payload) {
   var row = findAttendanceRow_(sheet, teacherId, today);
 
   if (type === "arrival") {
+    var cfg = readConfig_();
     if (row > 0) {
       var existingArr = sheet.getRange(row, 4).getValue();
       if (emptyToNull_(existingArr)) {
@@ -191,10 +188,10 @@ function handleMark_(payload) {
       sheet.getRange(row, 4).setValue(timeStr);
       sheet.getRange(row, 6).setValue(coords.lat);
       sheet.getRange(row, 7).setValue(coords.lng);
-      sheet.getRange(row, 10).setValue(statusFor_());
+      sheet.getRange(row, 10).setValue(statusFor_(timeStr, cfg.LATE_AFTER));
       return { ok: true, type: "arrival", time: timeStr, date: today };
     }
-    var statusArr = statusFor_();
+    var statusArr = statusFor_(timeStr, cfg.LATE_AFTER);
     sheet.appendRow([
       teacher.teacherId, teacher.name, today, timeStr, "",
       coords.lat, coords.lng, "", "", statusArr, ""
@@ -317,31 +314,29 @@ function seedConfig_(config) {
   }
 }
 
-// Older installations may still carry config rows the app no longer reads
-// (for example LATE_AFTER, which was a time value Sheets turned into a date).
-// Those rows are removed so the sheet always matches what the code expects.
-function removeUnusedConfigRows_(config) {
-  var removed = [];
-  var last = config.getLastRow();
-  for (var i = last - 1; i >= 2; i--) {
-    var key = String(config.getRange(i, 1).getValue()).trim();
-    if (REMOVED_CONFIG_KEYS.indexOf(key) >= 0) {
-      config.deleteRow(i);
-      removed.push(key);
-    }
-  }
-  return removed;
-}
-
 function readConfig_() {
   var sheet = getSheet_().getSheetByName(SHEET_CONFIG);
   var cfg = {};
   for (var i = 0; i < CONFIG_DEFAULTS.length; i++) cfg[CONFIG_DEFAULTS[i][0]] = CONFIG_DEFAULTS[i][1];
   if (sheet && sheet.getLastRow() >= 2) {
-    var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    var range = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2);
+    var rows = range.getValues();
+    var display = typeof range.getDisplayValues === "function" ? range.getDisplayValues() : null;
     for (var j = 0; j < rows.length; j++) {
       var key = String(rows[j][0]).trim();
-      if (key) cfg[key] = rows[j][1];
+      if (!key) continue;
+      // A time cell read with getValues() comes back as a Date (Sheets stores
+      // time-only values against the 1899-12-30 sentinel), and converting that
+      // date back with the timezone can drift by a few minutes because of the
+      // pre-1906 local-mean-time offset. The displayed text is what the admin
+      // actually typed, so use it for LATE_AFTER and keep raw values elsewhere
+      // (the coordinates must stay numeric).
+      if (key === "LATE_AFTER") {
+        var shown = display ? String(display[j][1]).trim() : "";
+        cfg[key] = shown && minutesOfDay_(shown) != null ? shown : rows[j][1];
+      } else {
+        cfg[key] = rows[j][1];
+      }
     }
   }
   cfg.RADIUS_M = Number(cfg.RADIUS_M) || 100;
@@ -434,10 +429,66 @@ function validateCoords_(lat, lng) {
   return { lat: la, lng: lo };
 }
 
-function statusFor_() {
-  // The college opens at 8:00 AM and closes at 3:00 PM. There is no late-marking
-  // policy, so an arrival is always recorded as "On time" when it is allowed.
-  return "On time";
+function statusFor_(arrivalTime, lateAfter) {
+  var arrival = minutesOfDay_(arrivalTime);
+  var threshold = minutesOfDay_(lateAfter);
+  if (arrival == null || threshold == null) return "On time";
+  return arrival > threshold ? "Late" : "On time";
+}
+
+// Turns any of the shapes a Config/Attendance cell can come back as into
+// minutes since midnight IST:
+//   - "HH:mm" / "HH:mm:ss"                (plain text or a displayed cell)
+//   - a Sheets time value, read back as a Date object (e.g. 1899-12-30T...)
+//   - an ISO date-time string             (e.g. "1899-12-30T04:38:50.000Z")
+//   - a day fraction 0..1                 (an unformatted Sheets time serial)
+//   - a whole number 0..1440              (minutes since midnight)
+// Returns null when the value cannot be understood, so status stays "On time".
+function minutesOfDay_(value) {
+  if (value === "" || value == null) return null;
+
+  if (Object.prototype.toString.call(value) === "[object Date]") {
+    if (isNaN(value.getTime())) return null;
+    return hmToMinutes_(Utilities.formatDate(value, TIMEZONE, "HH:mm"));
+  }
+
+  if (typeof value === "number") return numericMinutes_(value);
+
+  var s = String(value).trim();
+  if (!s) return null;
+
+  // A cell can also hand back a numeric serial or minutes as text.
+  if (/^\d+(\.\d+)?$/.test(s)) return numericMinutes_(Number(s));
+
+  // An ISO timestamp is a moment in time; read its IST wall clock.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    var parsed = new Date(s);
+    if (isNaN(parsed.getTime())) return null;
+    return hmToMinutes_(Utilities.formatDate(parsed, TIMEZONE, "HH:mm"));
+  }
+
+  return hmToMinutes_(s);
+}
+
+function numericMinutes_(value) {
+  if (!isFinite(value) || value < 0) return null;
+  if (value < 1) return Math.round(value * 1440);
+  if (value <= 1440) return Math.round(value);
+  return null;
+}
+
+function hmToMinutes_(text) {
+  var m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(text).trim());
+  if (!m) return null;
+  var h = Number(m[1]);
+  var min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function minutesToTime_(minutes) {
+  if (minutes == null) return null;
+  return pad2_(Math.floor(minutes / 60)) + ":" + pad2_(minutes % 60);
 }
 
 function timeToMs_(value) {

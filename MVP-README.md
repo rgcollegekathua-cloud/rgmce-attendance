@@ -37,7 +37,7 @@ Nothing was deleted. The MVP is completely separate and does not use them.
 | Arrival before Departure | Departure is rejected until arrival exists for that day |
 | One action per day | A second Arrival, Departure or Leave is rejected with a clear message |
 | Leave vs Attendance | Leave is rejected if attendance already exists, and vice versa |
-| Late marking | There is none — every arrival is recorded as `On time` |
+| Late marking | Arrival after `LATE_AFTER` (default `10:00` IST) is recorded as `Late`; at or before it is `On time` |
 | Teacher ID privacy | Kept internally only; never rendered in the frontend |
 
 The frontend never trusts the phone's clock. It takes the server's clock offset
@@ -83,19 +83,24 @@ Raw history is never rewritten.
 **Leaves sheet:** `Teacher ID | Teacher Name | Date | Leave Time | Marked At`
 
 **Config sheet:** `Key | Value` with `COLLEGE_LAT`, `COLLEGE_LNG`, `RADIUS_M`,
-`MAX_ACCURACY_M`. Edit these values directly in the sheet — no code change
-needed. The defaults already point at the college campus. Older sheets may still
-contain a `LATE_AFTER` row; it is unused now and `setup()` removes it.
+`LATE_AFTER`, `MAX_ACCURACY_M`. Edit these values directly in the sheet — no code
+change needed. The defaults already point at the college campus and set
+`LATE_AFTER` to `10:00`.
+
+`LATE_AFTER` accepts a plain `HH:mm` text value, a real Google Sheets time value,
+an ISO timestamp, or a number of minutes. The backend reads the cell as it is
+displayed, so a time cell that Sheets stored as a date (the `1899-12-30`
+sentinel) is still understood. If the value cannot be read, arrivals are treated
+as `On time` instead of failing.
 
 ## Local checks that were run
 
 - `node --check` on `docs/app.js` and `apps-script/Code.gs` — pass
-- `npm run test:appscript` — 44/44 pass (identify rules, arrival/departure/leave
+- `npm run test:appscript` — 55/55 pass (identify rules, arrival/departure/leave
   creation and duplicates, out-of-hours rejection for all three actions,
-  leave/attendance conflicts, server-time state, Date-object rows, config
-  cleanup, frontend button states and Teacher ID privacy)
-- An end-to-end run of the real backend and frontend against a mocked
-  spreadsheet and browser — 78/78 checks pass
+  leave/attendance conflicts, late detection at the threshold, Date/ISO/serial
+  thresholds, server-time state, Date-object rows, frontend button states,
+  status display and Teacher ID privacy)
 - Existing React project checks (`npm run typecheck`, `npm run lint`,
   `npm run build`) still pass — they were not touched.
 

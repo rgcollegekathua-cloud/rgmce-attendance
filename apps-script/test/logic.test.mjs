@@ -64,6 +64,22 @@ class MockSheet {
         return out;
       },
       getValue() { return this.getValues()[0][0]; },
+      getDisplayValues() {
+        const out = [];
+        for (let i = 0; i < h; i++) {
+          const src = sheet.data[row - 1 + i] || [];
+          const line = [];
+          for (let j = 0; j < w; j++) {
+            const v = src[col - 1 + j];
+            if (v == null) line.push("");
+            else if (Object.prototype.toString.call(v) === "[object Date]") {
+              line.push(formatDateMock(v, "Asia/Kolkata", "HH:mm:ss"));
+            } else line.push(String(v));
+          }
+          out.push(line);
+        }
+        return out;
+      },
       setValue(v) {
         if (!sheet.data[row - 1]) sheet.data[row - 1] = [];
         sheet.data[row - 1][col - 1] = v;
@@ -169,17 +185,39 @@ const CONFIG_SHEET = [
   ["COLLEGE_LAT", 32.7],
   ["COLLEGE_LNG", 75.3],
   ["RADIUS_M", 100],
+  ["LATE_AFTER", "10:00"],
   ["MAX_ACCURACY_M", 150]
 ];
 
-// Older installations still carry this row. The app ignores it and setup()
-// removes it.
-const CONFIG_SHEET_WITH_LEGACY_KEY = [
+// Sheets turns a typed "10:00" into a time value. getValues() can hand it back
+// as a Date object (time-only cells carry the 1899-12-30 sentinel date) or, if
+// the cell ended up as text, as an ISO timestamp. Both mean 10:00 IST.
+// 1899-12-30T04:38:50Z is how 10:00 is stored: Asia/Kolkata was UTC+5:21:10
+// (local mean time) before 1906, not UTC+5:30.
+const CONFIG_SHEET_DATE_THRESHOLD = [
   ["Key", "Value"],
   ["COLLEGE_LAT", 32.7],
   ["COLLEGE_LNG", 75.3],
   ["RADIUS_M", 100],
-  ["LATE_AFTER", "10:00"],
+  ["LATE_AFTER", new Date("1899-12-30T04:38:50.000Z")],
+  ["MAX_ACCURACY_M", 150]
+];
+
+const CONFIG_SHEET_ISO_THRESHOLD = [
+  ["Key", "Value"],
+  ["COLLEGE_LAT", 32.7],
+  ["COLLEGE_LNG", 75.3],
+  ["RADIUS_M", 100],
+  ["LATE_AFTER", "1899-12-30T04:38:50.000Z"],
+  ["MAX_ACCURACY_M", 150]
+];
+
+const CONFIG_SHEET_SERIAL_THRESHOLD = [
+  ["Key", "Value"],
+  ["COLLEGE_LAT", 32.7],
+  ["COLLEGE_LNG", 75.3],
+  ["RADIUS_M", 100],
+  ["LATE_AFTER", 10 / 24],
   ["MAX_ACCURACY_M", 150]
 ];
 
@@ -193,37 +231,55 @@ function fresh(overrides = {}) {
   });
 }
 
-test("config endpoint returns college settings without a late threshold", () => {
+test("config endpoint returns college settings including the late threshold", () => {
   const ctx = fresh();
   const res = call(ctx, { action: "config" });
   assert.equal(res.ok, true);
   assert.equal(res.collegeLat, 32.7);
   assert.equal(res.radiusM, 100);
-  assert.equal(res.lateAfter, undefined);
+  assert.equal(res.lateAfter, "10:00");
 });
 
-test("config endpoint ignores a leftover LATE_AFTER row", () => {
-  const ctx = fresh({ config: CONFIG_SHEET_WITH_LEGACY_KEY });
+test("config endpoint normalises a Date-typed late threshold", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_DATE_THRESHOLD });
   const res = call(ctx, { action: "config" });
   assert.equal(res.ok, true);
-  assert.equal(res.lateAfter, undefined);
+  assert.equal(res.lateAfter, "10:00");
   assert.equal(res.maxAccuracyM, 150);
 });
 
-test("setup removes the unused LATE_AFTER config row", () => {
-  const ctx = fresh({ config: CONFIG_SHEET_WITH_LEGACY_KEY });
-  ctx.setup("SPREAD123");
-  const keys = ctx._sheets.Config.data.slice(1).map((row) => String(row[0]).trim());
-  assert.ok(!keys.includes("LATE_AFTER"), "LATE_AFTER row must be removed");
-  assert.ok(keys.includes("COLLEGE_LAT"), "other config rows must be kept");
-  assert.equal(ctx._sheets.Teachers.data.length, TEACHERS.length, "teachers must not be touched");
+test("config endpoint normalises an ISO late threshold", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_ISO_THRESHOLD });
+  assert.equal(call(ctx, { action: "config" }).lateAfter, "10:00");
 });
 
-test("setup keeps a config sheet that has no unused rows", () => {
+test("config endpoint reports no threshold when the value is unreadable", () => {
+  const ctx = fresh({
+    config: [
+      ["Key", "Value"],
+      ["COLLEGE_LAT", 32.7],
+      ["COLLEGE_LNG", 75.3],
+      ["RADIUS_M", 100],
+      ["LATE_AFTER", "not a time"],
+      ["MAX_ACCURACY_M", 150]
+    ]
+  });
+  assert.equal(call(ctx, { action: "config" }).lateAfter, null);
+});
+
+test("setup keeps the LATE_AFTER row and seeds it when missing", () => {
   const ctx = fresh();
   ctx.setup("SPREAD123");
-  const keys = ctx._sheets.Config.data.slice(1).map((row) => String(row[0]).trim());
-  assert.deepEqual(keys, ["COLLEGE_LAT", "COLLEGE_LNG", "RADIUS_M", "MAX_ACCURACY_M"]);
+  const entries = ctx._sheets.Config.data.slice(1).map((row) => [String(row[0]).trim(), row[1]]);
+  const late = entries.find(([key]) => key === "LATE_AFTER");
+  assert.ok(late, "LATE_AFTER row must survive setup()");
+  assert.equal(late[1], "10:00");
+  assert.equal(ctx._sheets.Teachers.data.length, TEACHERS.length, "teachers must not be touched");
+
+  const blank = fresh({ config: [["Key", "Value"]] });
+  blank.setup("SPREAD123");
+  const keys = blank._sheets.Config.data.slice(1).map((row) => String(row[0]).trim());
+  assert.ok(keys.includes("LATE_AFTER"), "setup() must seed LATE_AFTER on a new sheet");
 });
 
 test("identify accepts active teacher, rejects unknown and inactive", () => {
@@ -263,8 +319,84 @@ test("duplicate arrival is rejected and original time is kept", () => {
   assert.equal(ctx._sheets.Attendance.data[1][3], "08:59:30");
 });
 
-test("status is always On time because there is no late policy", () => {
-  const ctx = fresh({ nowIso: "2026-10-21T14:59:00+05:30" });
+test("time values are understood in every shape a cell can return", () => {
+  const ctx = fresh();
+  assert.equal(ctx.minutesOfDay_("10:00"), 600);
+  assert.equal(ctx.minutesOfDay_("10:00:00"), 600);
+  assert.equal(ctx.minutesOfDay_(600), 600);
+  assert.equal(ctx.minutesOfDay_(10 / 24), 600);
+  assert.equal(ctx.minutesOfDay_("0.4166666666666667"), 600);
+  assert.equal(ctx.minutesOfDay_(new Date("1899-12-30T04:38:50.000Z")), 600);
+  assert.equal(ctx.minutesOfDay_("1899-12-30T04:38:50.000Z"), 600);
+  assert.equal(ctx.minutesOfDay_(""), null);
+  assert.equal(ctx.minutesOfDay_("nonsense"), null);
+  assert.equal(ctx.minutesOfDay_("25:00"), null);
+  assert.equal(ctx.minutesOfDay_(1441), null);
+});
+
+test("a missing LATE_AFTER row falls back to the default threshold", () => {
+  const ctx = fresh({
+    config: [
+      ["Key", "Value"],
+      ["COLLEGE_LAT", 32.7],
+      ["COLLEGE_LNG", 75.3],
+      ["RADIUS_M", 100],
+      ["MAX_ACCURACY_M", 150]
+    ],
+    nowIso: "2026-10-21T10:30:00+05:30"
+  });
+  // No LATE_AFTER row: readConfig_ falls back to the seeded default 10:00.
+  call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(ctx._sheets.Attendance.data[1][9], "Late");
+});
+
+test("late arrival is recorded as Late", () => {
+  const ctx = fresh({ nowIso: "2026-10-21T10:30:00+05:30" });
+  const res = call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(res.ok, true);
+  assert.equal(ctx._sheets.Attendance.data[1][9], "Late");
+});
+
+test("arrival exactly at the threshold is On time", () => {
+  const ctx = fresh({ nowIso: "2026-10-21T10:00:00+05:30" });
+  call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(ctx._sheets.Attendance.data[1][9], "On time");
+});
+
+test("late detection works when the threshold is stored as a Date", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_DATE_THRESHOLD, nowIso: "2026-10-21T10:30:00+05:30" });
+  call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(ctx._sheets.Attendance.data[1][9], "Late");
+
+  const early = fresh({ config: CONFIG_SHEET_DATE_THRESHOLD, nowIso: "2026-10-21T09:30:00+05:30" });
+  call(early, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(early._sheets.Attendance.data[1][9], "On time");
+});
+
+test("late detection works when the threshold is stored as an ISO string", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_ISO_THRESHOLD, nowIso: "2026-10-21T10:30:00+05:30" });
+  call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(ctx._sheets.Attendance.data[1][9], "Late");
+});
+
+test("late detection works when the threshold is stored as a day fraction", () => {
+  const ctx = fresh({ config: CONFIG_SHEET_SERIAL_THRESHOLD, nowIso: "2026-10-21T10:30:00+05:30" });
+  call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
+  assert.equal(ctx._sheets.Attendance.data[1][9], "Late");
+});
+
+test("an unreadable threshold never marks a teacher late", () => {
+  const ctx = fresh({
+    config: [
+      ["Key", "Value"],
+      ["COLLEGE_LAT", 32.7],
+      ["COLLEGE_LNG", 75.3],
+      ["RADIUS_M", 100],
+      ["LATE_AFTER", "not a time"],
+      ["MAX_ACCURACY_M", 150]
+    ],
+    nowIso: "2026-10-21T10:30:00+05:30"
+  });
   const res = call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
   assert.equal(res.ok, true);
   assert.equal(ctx._sheets.Attendance.data[1][9], "On time");
