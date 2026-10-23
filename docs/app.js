@@ -2,20 +2,31 @@
 
 /* ============================================================
  * RGMCE Teacher Attendance - frontend
- * After deploying the Apps Script backend, paste its Web App URL
- * into ENDPOINT below, then reload this page.
+ * The Apps Script Web App URL is configured in ENDPOINT below.
  * ============================================================ */
 
 var CONFIG = {
   ENDPOINT: "https://script.google.com/macros/s/AKfycbzm799e-F02_iS1dKRB54tygo93G58Qmcjb8SZXkM_Pdpdbo_2Hfvmsrs1FisodaRJH/exec",
   GPS_TIMEOUT_MS: 20000,
   GPS_HIGH_ACCURACY: true,
+  REQUEST_TIMEOUT_MS: 25000,
   STORAGE_KEY: "rgmce_teacher_id",
-  // The college opens at 8:00 AM and closes at 3:00 PM IST. Arrival, Departure
-  // and Leave are only available inside this window.
+  // Arrival, Departure and Leave are available from 8:00 AM to 2:59 PM IST.
   WINDOW_START_MINUTES: 480,
   WINDOW_END_MINUTES: 900,
   REFRESH_MS: 60000
+};
+
+var LABELS = {
+  arrival: "Mark Arrival",
+  departure: "Mark Departure",
+  leave: "Record Leave"
+};
+
+var BUSY_LABELS = {
+  arrival: "Marking Arrival\u2026",
+  departure: "Marking Departure\u2026",
+  leave: "Recording Leave\u2026"
 };
 
 var state = {
@@ -24,9 +35,12 @@ var state = {
   serverConfig: null,
   configError: null,
   configPromise: null,
+  configBusy: false,
   serverOffsetMs: null,
   todayData: null,
   todayDate: null,
+  todayError: null,
+  statusLoading: false,
   clockTimer: null,
   busy: false
 };
@@ -35,36 +49,82 @@ function $(id) {
   return document.getElementById(id);
 }
 
+function setText(id, text) {
+  var el = $(id);
+  if (el) el.textContent = text;
+}
+
+function setNote(text) {
+  var el = $("action-note");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("hidden", !text);
+}
+
+function setRetryConfigVisible(visible) {
+  var el = $("btn-retry-config");
+  if (el) el.classList.toggle("hidden", !visible);
+}
+
+function setRetryStatusVisible(visible) {
+  var el = $("btn-reload-status");
+  if (el) el.classList.toggle("hidden", !visible);
+}
+
+function setWindowChip(text, closed) {
+  var el = $("window-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "window-chip" + (closed ? " closed" : "");
+}
+
+function setWindowStatus(open) {
+  setWindowChip(open ? "Open until 3 PM" : "Closed", !open);
+}
+
 function showView(id) {
   ["view-loading", "view-id", "view-confirm", "view-home", "view-error"].forEach(function (v) {
-    $(v).classList.toggle("hidden", v !== id);
+    var el = $(v);
+    if (el) el.classList.toggle("hidden", v !== id);
   });
 }
 
 var messageTimer = null;
 
-function showMessage(text, kind) {
+function hideMessage() {
   var el = $("message");
-  el.textContent = text;
-  el.className = "message " + (kind || "info");
-  el.classList.remove("hidden");
-  if (messageTimer) clearTimeout(messageTimer);
-  messageTimer = setTimeout(function () {
-    el.classList.add("hidden");
-  }, 4500);
+  if (el) el.classList.add("hidden");
 }
 
-function setBusy(busy) {
+function showMessage(text, kind) {
+  var el = $("message");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "message " + (kind || "info");
+  if (el.setAttribute) el.setAttribute("role", kind === "error" ? "alert" : "status");
+  if (messageTimer) clearTimeout(messageTimer);
+  messageTimer = setTimeout(hideMessage, kind === "error" ? 7000 : 4500);
+}
+
+function setBusy(busy, action) {
   state.busy = busy;
-  if ($("btn-arrival")) {
-    $("btn-arrival").textContent = busy ? "WORKING..." : "MARK ARRIVAL";
-  }
-  if ($("btn-departure")) {
-    $("btn-departure").textContent = busy ? "WORKING..." : "MARK DEPARTURE";
-  }
-  if ($("btn-leave")) {
-    $("btn-leave").textContent = busy ? "WORKING..." : "MARK LEAVE";
-  }
+  ["arrival", "departure", "leave"].forEach(function (key) {
+    var btn = $("btn-" + key);
+    if (!btn) return;
+    if (busy) {
+      btn.disabled = true;
+      btn.textContent = key === action ? BUSY_LABELS[key] : LABELS[key];
+    } else {
+      btn.textContent = LABELS[key];
+    }
+  });
+  var change = $("btn-change");
+  if (change) change.disabled = busy;
+  var retryConfig = $("btn-retry-config");
+  if (retryConfig) retryConfig.disabled = busy;
+  var retryStatus = $("btn-reload-status");
+  if (retryStatus) retryStatus.disabled = busy;
+  if (!busy) updateActionButtons(state.todayData);
 }
 
 function prettyDate() {
@@ -77,32 +137,81 @@ function prettyDate() {
   });
 }
 
-function callBackend(payload) {
-  if (!CONFIG.ENDPOINT) {
-    return Promise.reject(new Error("App is not configured yet. The owner must add the Apps Script URL in app.js."));
-  }
-  return fetch(CONFIG.ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(payload)
-  }).then(function (res) {
-    if (!res.ok) throw new Error("Server error (HTTP " + res.status + ").");
-    return res.json();
-  }).then(function (data) {
-    if (!data || data.ok !== true) {
-      throw new Error(data && data.error ? data.error : "Unexpected server response.");
-    }
-    return data;
+function formatDateKey(key) {
+  var m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(key || ""));
+  if (!m) return prettyDate();
+  var date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0));
+  if (isNaN(date.getTime())) return prettyDate();
+  return date.toLocaleDateString("en-IN", {
+    timeZone: "UTC",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric"
   });
 }
 
-// The college location and the marking window both come from the server.
-// If the configuration cannot be loaded there is no safe fallback: the GPS
-// based actions stay disabled so a teacher is never rejected for the wrong
-// reason. Leave does not need a location, so it keeps working.
+function networkError(err) {
+  if (err && err.name === "AbortError") {
+    return new Error("The server took too long to respond. Check your internet connection and try again.");
+  }
+  return new Error("Unable to reach the attendance server. Check your internet connection and try again.");
+}
+
+function callBackend(payload) {
+  if (!CONFIG.ENDPOINT) {
+    return Promise.reject(new Error("This app is not configured. Please contact the college administrator."));
+  }
+
+  var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  var timer = null;
+  if (controller && typeof setTimeout === "function") {
+    timer = setTimeout(function () {
+      try { controller.abort(); } catch (ignore) {}
+    }, CONFIG.REQUEST_TIMEOUT_MS);
+  }
+
+  var request = fetch(CONFIG.ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+    signal: controller ? controller.signal : undefined
+  }).then(function (res) {
+    if (!res.ok) {
+      throw new Error("The server returned an error (HTTP " + res.status + "). Please try again.");
+    }
+    return res.json().catch(function () {
+      throw new Error("The server returned an unexpected response. Please try again.");
+    });
+  }, function (err) {
+    throw networkError(err);
+  }).then(function (data) {
+    if (!data || data.ok !== true) {
+      var error = new Error(data && data.error ? data.error : "The server returned an unexpected response. Please try again.");
+      if (data && data.code) error.code = data.code;
+      error.isServerError = true;
+      throw error;
+    }
+    return data;
+  });
+
+  if (timer && request && typeof request.finally === "function") {
+    return request.finally(function () { clearTimeout(timer); });
+  }
+  if (timer) {
+    request.then(function () { clearTimeout(timer); }, function () { clearTimeout(timer); });
+  }
+  return request;
+}
+
+// The college location comes from the server only. If it cannot be loaded,
+// Arrival and Departure stay disabled until the teacher retries; Leave keeps
+// working because it does not need a location.
 function loadServerConfig() {
   if (state.serverConfig) return Promise.resolve(state.serverConfig);
   if (state.configPromise) return state.configPromise;
+
+  state.configError = null;
   var pending = callBackend({ action: "config" }).then(function (data) {
     var cfg = {
       lat: Number(data.collegeLat),
@@ -113,20 +222,21 @@ function loadServerConfig() {
     if (isNaN(cfg.lat) || isNaN(cfg.lng)) {
       throw new Error("College coordinates are not configured on the server.");
     }
+    if (!(cfg.radiusM > 0) || !(cfg.maxAccuracyM > 0)) {
+      throw new Error("The college location settings are incomplete.");
+    }
     state.serverConfig = cfg;
     state.configError = null;
     return cfg;
   }).catch(function (err) {
     state.serverConfig = null;
-    state.configError = err.message || String(err);
+    state.configError = err && err.message ? err.message : String(err);
     if (typeof console !== "undefined" && console.error) {
       console.error("College location could not be loaded:", state.configError);
     }
-    throw new Error(
-      "Could not load the college location from the server. Check your internet connection, " +
-      "and ask the admin if it keeps happening."
-    );
+    throw new Error("Unable to load the college location. Check your internet connection and try again.");
   });
+
   state.configPromise = pending;
   pending.then(clearConfigPromise, clearConfigPromise);
   return pending;
@@ -142,19 +252,58 @@ function identify(teacherId) {
   });
 }
 
+function isCurrentTeacher(teacherId) {
+  return !!(state.teacher && state.teacher.teacherId === teacherId);
+}
+
+function setStatusValue(text, className) {
+  var el = $("status-value");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "status-value";
+  if (className) el.classList.add(className);
+}
+
+function clearStatusDetails() {
+  setText("arrival-time", "\u2014");
+  setText("departure-time", "\u2014");
+}
+
+function renderStatusLoading() {
+  state.statusLoading = true;
+  setStatusValue("Loading\u2026", "");
+  clearStatusDetails();
+  setWindowChip("Checking hours", false);
+  setNote("Loading today's attendance status\u2026");
+  updateActionButtons(state.todayData);
+}
+
 function loadToday() {
-  return callBackend({ action: "today", teacherId: state.teacher.teacherId }).then(function (data) {
+  if (!state.teacher) return Promise.reject(new Error("Please enter your Teacher ID."));
+  var teacherId = state.teacher.teacherId;
+
+  return callBackend({ action: "today", teacherId: teacherId }).then(function (data) {
+    if (!isCurrentTeacher(teacherId)) return null;
+    state.statusLoading = false;
+    state.todayError = null;
     state.todayData = data || {};
     state.todayDate = state.todayData.date || null;
     applyServerClock(state.todayData);
     renderToday(state.todayData);
+    setText("home-date", formatDateKey(state.todayDate));
     updateActionButtons(state.todayData);
+    return state.todayData;
+  }).catch(function (err) {
+    if (!isCurrentTeacher(teacherId)) throw err;
+    state.statusLoading = false;
+    state.todayError = err && err.message ? err.message : "Unable to load today's attendance status.";
+    updateActionButtons(state.todayData);
+    throw err;
   });
 }
 
-// The server is the source of truth for the clock. The offset between the
-// server time and this device is stored once, so the buttons can switch
-// themselves off exactly at 3:00 PM even if the page stays open.
+// The server is the source of truth for time. The offset is stored once so the
+// buttons can switch off at 3:00 PM even if the page stays open all day.
 function applyServerClock(data) {
   var d = data || {};
   if (!d.date || !d.serverTime) return;
@@ -181,7 +330,57 @@ function pad2(n) {
   return (n < 10 ? "0" : "") + n;
 }
 
-// True while the college is open: 8:00 AM to 2:59 PM IST.
+function to12Hour(hours, minutes) {
+  var period = hours >= 12 ? "PM" : "AM";
+  var hour = hours % 12;
+  if (hour === 0) hour = 12;
+  return pad2(hour) + ":" + minutes + " " + period;
+}
+
+// Times come back either as "HH:mm:ss" or as a time-only sheet value
+// serialized by the server (for example 1899-12-30T03:59:48.000Z).
+// Always show the wall-clock time in IST as HH:MM AM/PM.
+function formatTimeValue(value) {
+  if (value === null || value === undefined) return "\u2014";
+  var raw = String(value).trim();
+  if (!raw) return "\u2014";
+
+  var hhmm = /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(raw);
+  if (hhmm) return to12Hour(Number(hhmm[1]), hhmm[2]);
+
+  var parsed = new Date(raw);
+  if (!isNaN(parsed.getTime())) {
+    try {
+      var formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
+      });
+      if (typeof formatter.formatToParts === "function") {
+        var parts = formatter.formatToParts(parsed);
+        var hour = "";
+        var minute = "";
+        var period = "";
+        parts.forEach(function (part) {
+          if (part.type === "hour") hour = part.value;
+          else if (part.type === "minute") minute = part.value;
+          else if (part.type === "dayPeriod") period = part.value.toUpperCase();
+        });
+        if (hour && minute && period) return hour + ":" + minute + " " + period;
+      } else {
+        var formatted = formatter.format(parsed).replace(/\s+/g, " ");
+        if (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(formatted)) return formatted.toUpperCase();
+      }
+    } catch (ignore) { /* fall back to UTC components below */ }
+    return to12Hour(parsed.getUTCHours(), pad2(parsed.getUTCMinutes()));
+  }
+
+  var fallback = /(\d{1,2}):(\d{2})/.exec(raw);
+  if (fallback) return to12Hour(Number(fallback[1]), fallback[2]);
+  return "\u2014";
+}
+
 function isAttendanceOpenNow(data) {
   var now = Date.now();
   if (state.serverOffsetMs != null) now += state.serverOffsetMs;
@@ -194,8 +393,6 @@ function isAttendanceOpenNow(data) {
   return minutes >= CONFIG.WINDOW_START_MINUTES && minutes < CONFIG.WINDOW_END_MINUTES;
 }
 
-// Keeps the buttons in step with the clock: they switch off at 3:00 PM and
-// come back on at 8:00 AM the next day, and a new day reloads the status.
 function startClockWatcher() {
   if (typeof setInterval !== "function") return;
   if (state.clockTimer) clearInterval(state.clockTimer);
@@ -204,58 +401,45 @@ function startClockWatcher() {
     var offset = state.serverOffsetMs == null ? 0 : state.serverOffsetMs;
     var currentDate = istDateKey(new Date(Date.now() + offset));
     if (state.todayDate && currentDate !== state.todayDate) {
-      loadToday().catch(function () { updateActionButtons(state.todayData); });
+      loadToday().catch(function () { /* the status note and retry button explain the failure */ });
       return;
     }
     updateActionButtons(state.todayData);
   }, CONFIG.REFRESH_MS);
 }
 
-function renderToday(data){
-  var statusValue=document.getElementById('status-value');
-  statusValue.className='status-value';
-  var arrivalEl=document.getElementById('arrival-time');
-  var departureEl=document.getElementById('departure-time');
-  var hoursEl=document.getElementById('hours-worked');
-  if(data.leave){
-    statusValue.textContent='Leave';
-    statusValue.classList.add('done');
-    arrivalEl.textContent='-';
-    departureEl.textContent='-';
-    hoursEl.textContent='-';
+function renderToday(data) {
+  var d = data || {};
+  if (d.leave) {
+    setStatusValue("Leave", "done");
+    clearStatusDetails();
     return;
   }
-  if(!data.arrivalTime){
-    statusValue.textContent='Not marked yet';
-    arrivalEl.textContent='-';
-    departureEl.textContent='-';
-    hoursEl.textContent='-';
+  if (!d.arrivalTime) {
+    setStatusValue("Not marked", "");
+    clearStatusDetails();
     return;
   }
-  arrivalEl.textContent=data.arrivalTime||'-';
-  departureEl.textContent=data.departureTime||'-';
-  hoursEl.textContent=(data.hoursWorked!=null&&data.hoursWorked!=='')?data.hoursWorked+' h':'-';
-  if(data.departureTime){statusValue.textContent='Completed';statusValue.classList.add('done');}
-  else if(data.status==='Late'){statusValue.textContent='Late';statusValue.classList.add('late');}
-  else{statusValue.textContent='On time';statusValue.classList.add('on-time');}
+  setText("arrival-time", formatTimeValue(d.arrivalTime));
+  setText("departure-time", formatTimeValue(d.departureTime));
+  setStatusValue("Present", "on-time");
 }
 
-
 function renderHome() {
-  var nameEl = $("home-name");
-  if (nameEl) nameEl.textContent = state.teacher.name;
-  var dateEl = $("home-date");
-  if (dateEl) dateEl.textContent = prettyDate();
+  var teacherId = state.teacher.teacherId;
+  setText("home-name", state.teacher.name);
+  setText("home-date", prettyDate());
+  renderStatusLoading();
   showView("view-home");
   loadToday().catch(function (err) {
-    showMessage(err.message, "error");
+    if (isCurrentTeacher(teacherId)) showMessage(err.message, "error");
   });
 }
 
 function getPosition() {
   return new Promise(function (resolve, reject) {
     if (!navigator.geolocation) {
-      reject(new Error("This phone does not support location services."));
+      reject(new Error("Location services are not available on this device."));
       return;
     }
     navigator.geolocation.getCurrentPosition(
@@ -267,10 +451,14 @@ function getPosition() {
         });
       },
       function (err) {
-        var msg = "Could not get your location.";
-        if (err.code === 1) msg = "Location permission was denied. Please allow location access.";
-        else if (err.code === 2) msg = "Location is unavailable right now.";
-        else if (err.code === 3) msg = "Location request timed out. Try again outdoors.";
+        var msg = "Unable to verify your location. Please try again.";
+        if (err.code === 1) {
+          msg = "Unable to verify your location. Please enable location access in your browser settings and try again.";
+        } else if (err.code === 2) {
+          msg = "Your location is unavailable right now. Move to an open area and try again.";
+        } else if (err.code === 3) {
+          msg = "Location request timed out. Please try again.";
+        }
         reject(new Error(msg));
       },
       {
@@ -296,21 +484,19 @@ function distanceMetres(lat1, lng1, lat2, lng2) {
 function checkLocation(coords) {
   var cfg = state.serverConfig;
   if (!cfg) {
-    throw new Error(
-      "Could not load the college location from the server. Check your internet connection and try again."
-    );
+    throw new Error("Campus location settings are not available. Retry the location connection and try again.");
   }
   if (coords.accuracy > cfg.maxAccuracyM) {
     throw new Error(
-      "Your GPS reading is too imprecise (" + Math.round(coords.accuracy) +
-      " m). Move away from buildings or go outdoors and try again."
+      "Your GPS accuracy is too low (" + Math.round(coords.accuracy) +
+      " m). Move to an open area and try again."
     );
   }
   var d = distanceMetres(coords.lat, coords.lng, cfg.lat, cfg.lng);
   if (d > cfg.radiusM) {
     throw new Error(
-      "You are about " + Math.round(d) + " m from the college. " +
-      "Attendance can only be marked within " + cfg.radiusM + " m of the campus."
+      "You appear to be outside the permitted campus area (about " +
+      Math.round(d) + " m from the college)."
     );
   }
   return d;
@@ -319,12 +505,13 @@ function checkLocation(coords) {
 function markAttendance(type) {
   if (state.busy || !state.teacher) return;
   if (type === "departure") {
-    if (!confirm("Are you sure you want to mark your departure?")) {
-      return;
-    }
+    if (!confirm("Mark your Departure now? This cannot be undone from this app.")) return;
   }
-  setBusy(true);
-  showMessage("Getting your location...", "info");
+
+  var teacherId = state.teacher.teacherId;
+  var label = type === "departure" ? "Departure" : "Arrival";
+  setBusy(true, type);
+  showMessage("Verifying your location\u2026", "info");
 
   loadServerConfig()
     .then(getPosition)
@@ -332,7 +519,7 @@ function markAttendance(type) {
       checkLocation(coords);
       return callBackend({
         action: "mark",
-        teacherId: state.teacher.teacherId,
+        teacherId: teacherId,
         type: type,
         lat: coords.lat,
         lng: coords.lng,
@@ -340,14 +527,16 @@ function markAttendance(type) {
       });
     })
     .then(function (data) {
-      var label = type === "arrival" ? "Arrival" : "Departure";
-      showMessage(label + " recorded at " + (data.time || "") + ".", "success");
-      return loadToday();
+      var suffix = data && data.time ? " at " + data.time : "";
+      showMessage(label + " marked successfully" + suffix + ".", "success");
+      return loadToday().catch(function () { /* the status note offers a retry */ });
     })
     .catch(function (err) {
-      showMessage(err.message, "error");
+      showMessage(err && err.message ? err.message : "Unable to mark " + label + ". Please try again.", "error");
       updateActionButtons(state.todayData);
-      return null;
+      if (err && err.isServerError) {
+        loadToday().catch(function () { /* keep the original message visible */ });
+      }
     })
     .then(function () {
       setBusy(false);
@@ -356,16 +545,24 @@ function markAttendance(type) {
 
 function markLeave() {
   if (state.busy || !state.teacher) return;
-  if (!confirm("Are you sure you want to mark leave for today?")) return;
-  setBusy(true);
-  callBackend({ action: "leave", teacherId: state.teacher.teacherId })
+  if (!confirm("Record Leave for today? This cannot be undone from this app.")) return;
+
+  var teacherId = state.teacher.teacherId;
+  setBusy(true, "leave");
+  showMessage("Recording your Leave\u2026", "info");
+
+  callBackend({ action: "leave", teacherId: teacherId })
     .then(function (data) {
-      showMessage("Leave recorded at " + (data.time || "") + ".", "success");
-      return loadToday();
+      var suffix = data && data.time ? " at " + data.time : "";
+      showMessage("Leave recorded successfully" + suffix + ".", "success");
+      return loadToday().catch(function () { /* the status note offers a retry */ });
     })
     .catch(function (err) {
-      showMessage(err.message, "error");
-      return null;
+      showMessage(err && err.message ? err.message : "Unable to record Leave. Please try again.", "error");
+      updateActionButtons(state.todayData);
+      if (err && err.isServerError) {
+        loadToday().catch(function () { /* keep the original message visible */ });
+      }
     })
     .then(function () {
       setBusy(false);
@@ -375,12 +572,15 @@ function markLeave() {
 function enterTeacher(teacher, persist) {
   state.teacher = teacher;
   state.pendingTeacher = null;
+  state.todayData = null;
+  state.todayDate = null;
+  state.todayError = null;
+  state.serverOffsetMs = null;
   if (persist) {
     try {
       localStorage.setItem(CONFIG.STORAGE_KEY, teacher.teacherId);
     } catch (e) { /* storage may be blocked */ }
   }
-  // Ensure teacherId not displayed anywhere - only internally stored
   renderHome();
   startClockWatcher();
 }
@@ -388,88 +588,175 @@ function enterTeacher(teacher, persist) {
 function resetToIdEntry() {
   state.teacher = null;
   state.pendingTeacher = null;
+  state.todayData = null;
+  state.todayDate = null;
+  state.todayError = null;
+  state.statusLoading = false;
+  state.busy = false;
+  state.serverOffsetMs = null;
+  if (state.clockTimer) {
+    clearInterval(state.clockTimer);
+    state.clockTimer = null;
+  }
   try {
     localStorage.removeItem(CONFIG.STORAGE_KEY);
   } catch (e) { /* ignore */ }
-  $("teacher-id-input").value = "";
+  var input = $("teacher-id-input");
+  if (input) input.value = "";
+  var submit = $("id-submit");
+  if (submit) submit.disabled = false;
   showView("view-id");
 }
 
 function showFatal(err) {
-  $("error-text").textContent = err.message || String(err);
+  state.statusLoading = false;
+  setText("error-text", err && err.message ? err.message : String(err));
   showView("view-error");
 }
 
-function init() {
-  $("id-form").addEventListener("submit", function (ev) {
-    ev.preventDefault();
-    var raw = $("teacher-id-input").value.trim().toUpperCase();
-    if (!raw) return;
-    $("id-submit").disabled = true;
-    identify(raw)
-      .then(function (teacher) {
-        state.pendingTeacher = teacher;
-        $("confirm-name").textContent = teacher.name;
-        showView("view-confirm");
-      })
-      .catch(function (err) {
-        showMessage(err.message, "error");
-      })
-      .then(function () {
-        $("id-submit").disabled = false;
-      });
-  });
+function retryConfig() {
+  if (state.busy || state.configBusy) return;
+  state.configBusy = true;
+  state.serverConfig = null;
+  state.configError = null;
+  state.configPromise = null;
 
-  $("confirm-yes").addEventListener("click", function () {
-    if (state.pendingTeacher) enterTeacher(state.pendingTeacher, true);
-  });
+  var btn = $("btn-retry-config");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Retrying\u2026";
+  }
+  showMessage("Reconnecting to the attendance server\u2026", "info");
 
-  $("confirm-no").addEventListener("click", function () {
-    state.pendingTeacher = null;
-    $("teacher-id-input").value = "";
-    showView("view-id");
+  loadServerConfig().then(function () {
+    showMessage("Connection restored. You can mark attendance.", "success");
+  }).catch(function (err) {
+    showMessage(err.message, "error");
+  }).then(function () {
+    state.configBusy = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Retry location connection";
+    }
+    updateActionButtons(state.todayData);
   });
+}
 
-  $("btn-arrival").addEventListener("click", function () { markAttendance("arrival"); });
-  $("btn-departure").addEventListener("click", function () {
-    markAttendance("departure");
+function retryStatus() {
+  if (state.busy || state.statusLoading || !state.teacher) return;
+  var teacherId = state.teacher.teacherId;
+  renderStatusLoading();
+  loadToday().then(function () {
+    if (isCurrentTeacher(teacherId)) showMessage("Attendance status refreshed.", "success");
+  }).catch(function (err) {
+    if (isCurrentTeacher(teacherId)) showMessage(err.message, "error");
   });
+}
+
+function updateActionButtons(data) {
+  var btnArr = $("btn-arrival");
+  var btnDep = $("btn-departure");
   var btnLeave = $("btn-leave");
-  if (btnLeave) {
-    btnLeave.onclick = null;
-    btnLeave.addEventListener("click", function () { markLeave(); });
+  if (!btnArr || !btnDep || !btnLeave) return;
+
+  var d = data || {};
+  var open = isAttendanceOpenNow(d);
+  var hasArrival = !!(d.arrivalTime && String(d.arrivalTime).trim());
+  var hasDeparture = !!(d.departureTime && String(d.departureTime).trim());
+  var locationKnown = !state.configError;
+  var note = "";
+  var showConfigRetry = false;
+  var showStatusRetry = false;
+
+  if (state.busy) {
+    btnArr.disabled = true;
+    btnDep.disabled = true;
+    btnLeave.disabled = true;
+    setNote("");
+    setRetryConfigVisible(false);
+    setRetryStatusVisible(false);
+    return;
   }
 
-  var btnChange = $("btn-change");
-  if (btnChange) {
-    btnChange.addEventListener("click", function () {
-      if (confirm("Forget this Teacher ID on this phone?")) resetToIdEntry();
-    });
+  if (state.statusLoading) {
+    btnArr.disabled = true;
+    btnDep.disabled = true;
+    btnLeave.disabled = true;
+    setWindowChip("Checking hours", false);
+    setNote("Loading today's attendance status\u2026");
+    setRetryConfigVisible(false);
+    setRetryStatusVisible(false);
+    return;
   }
 
-  $("btn-retry").addEventListener("click", function () { boot(); });
+  if (state.todayError) {
+    btnArr.disabled = true;
+    btnDep.disabled = true;
+    btnLeave.disabled = true;
+    setWindowChip("Unavailable", true);
+    setNote("Attendance status could not be loaded. Check your connection and try again.");
+    setRetryConfigVisible(false);
+    setRetryStatusVisible(true);
+    return;
+  }
 
-  boot();
+  setWindowStatus(open);
+
+  if (d.leave) {
+    btnArr.disabled = true;
+    btnDep.disabled = true;
+    btnLeave.disabled = true;
+    note = "Leave has been recorded for today.";
+  } else if (hasArrival && hasDeparture) {
+    btnArr.disabled = true;
+    btnDep.disabled = true;
+    btnLeave.disabled = true;
+    note = "Attendance for today is complete.";
+  } else if (hasArrival) {
+    btnArr.disabled = true;
+    btnLeave.disabled = true;
+    btnDep.disabled = !open || !locationKnown;
+    showConfigRetry = !locationKnown && open;
+    if (!open) {
+      note = "Attendance can be marked between 8:00 AM and 3:00 PM.";
+    } else if (!locationKnown) {
+      note = "Campus location is unavailable. Retry the connection to mark Departure.";
+    } else {
+      note = "Mark Departure when you leave the campus.";
+    }
+  } else {
+    btnArr.disabled = !open || !locationKnown;
+    btnDep.disabled = true;
+    btnLeave.disabled = !open;
+    showConfigRetry = !locationKnown && open;
+    if (!open) {
+      note = "Attendance can be marked between 8:00 AM and 3:00 PM.";
+    } else if (!locationKnown) {
+      note = "Campus location is unavailable. Retry the connection to mark Arrival. You can still record Leave.";
+    } else {
+      note = "Mark Arrival to begin. Location access is required.";
+    }
+  }
+
+  setNote(note);
+  setRetryConfigVisible(showConfigRetry);
+  setRetryStatusVisible(showStatusRetry);
 }
 
 function boot() {
   showView("view-loading");
-  $("loading-text").textContent = "Loading…";
+  setText("loading-text", "Loading attendance\u2026");
 
   if (!CONFIG.ENDPOINT) {
-    showFatal(new Error(
-      "This app is not connected yet. The owner must paste the Google Apps Script Web App URL into the ENDPOINT setting in app.js."
-    ));
+    showFatal(new Error("This app is not configured. Please contact the college administrator."));
     return;
   }
 
-  // Load the college location up front. If it fails the GPS based buttons
-  // stay disabled instead of guessing a position.
-  loadServerConfig()
-    .catch(function () { /* the reason is kept in state.configError */ })
-    .then(function () {
-      updateActionButtons(state.todayData);
-    });
+  loadServerConfig().catch(function () {
+    /* The reason is kept in state.configError and explained on the home screen. */
+  }).then(function () {
+    if (state.teacher) updateActionButtons(state.todayData);
+  });
 
   var saved = null;
   try {
@@ -481,42 +768,84 @@ function boot() {
     return;
   }
 
-  $("loading-text").textContent = "Checking your saved Teacher ID…";
-  identify(saved)
-    .then(function (teacher) {
-      enterTeacher(teacher, false);
-    })
-    .catch(function (err) {
+  setText("loading-text", "Checking your saved Teacher ID\u2026");
+  identify(saved).then(function (teacher) {
+    enterTeacher(teacher, false);
+  }).catch(function (err) {
+    if (err && (err.code === "TEACHER_NOT_FOUND" || err.code === "TEACHER_INACTIVE")) {
       try {
         localStorage.removeItem(CONFIG.STORAGE_KEY);
       } catch (e) { /* ignore */ }
       showView("view-id");
-      showMessage("Saved Teacher ID was not accepted: " + err.message, "error");
-    });
+      showMessage(err.message, "error");
+      return;
+    }
+    showFatal(new Error("Unable to verify your saved Teacher ID. Check your internet connection and try again."));
+  });
+}
+
+function init() {
+  $("id-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var input = $("teacher-id-input");
+    var submit = $("id-submit");
+    var raw = input.value.trim().toUpperCase();
+    if (!raw) {
+      input.focus();
+      return;
+    }
+    if (submit.disabled) return;
+    submit.disabled = true;
+    state.pendingTeacher = null;
+    identify(raw)
+      .then(function (teacher) {
+        state.pendingTeacher = teacher;
+        setText("confirm-name", teacher.name);
+        showView("view-confirm");
+      })
+      .catch(function (err) {
+        showMessage(err.message, "error");
+      })
+      .then(function () {
+        submit.disabled = false;
+      });
+  });
+
+  $("confirm-yes").addEventListener("click", function () {
+    if (state.pendingTeacher) enterTeacher(state.pendingTeacher, true);
+  });
+
+  $("confirm-no").addEventListener("click", function () {
+    state.pendingTeacher = null;
+    var input = $("teacher-id-input");
+    input.value = "";
+    showView("view-id");
+    input.focus();
+  });
+
+  $("btn-arrival").addEventListener("click", function () { markAttendance("arrival"); });
+  $("btn-departure").addEventListener("click", function () { markAttendance("departure"); });
+  $("btn-leave").addEventListener("click", function () { markLeave(); });
+
+  $("btn-change").addEventListener("click", function () {
+    if (confirm("Remove your Teacher ID from this device? You will need to enter it again next time.")) {
+      resetToIdEntry();
+    }
+  });
+
+  $("btn-retry").addEventListener("click", function () { boot(); });
+  $("btn-use-different").addEventListener("click", function () { resetToIdEntry(); });
+
+  var retryConfigBtn = $("btn-retry-config");
+  if (retryConfigBtn) retryConfigBtn.addEventListener("click", retryConfig);
+
+  var retryStatusBtn = $("btn-reload-status");
+  if (retryStatusBtn) retryStatusBtn.addEventListener("click", retryStatus);
+
+  var message = $("message");
+  if (message) message.addEventListener("click", hideMessage);
+
+  boot();
 }
 
 document.addEventListener("DOMContentLoaded", init);
-
-function updateActionButtons(data){
-  var btnArr=document.getElementById('btn-arrival');
-  var btnDep=document.getElementById('btn-departure');
-  var btnLeave=document.getElementById('btn-leave');
-  if(!btnArr||!btnDep||!btnLeave)return;
-  var d=data||{};
-  var open=isAttendanceOpenNow(d);
-  var hasArrival=!!(d.arrivalTime&&String(d.arrivalTime).trim());
-  var hasDeparture=!!(d.departureTime&&String(d.departureTime).trim());
-  // Arrival and Departure need a GPS reading, so they stay off while the
-  // college location is unknown. Leave needs neither.
-  var locationKnown=!state.configError;
-  if(d.leave){btnArr.disabled=true;btnDep.disabled=true;btnLeave.disabled=true;return;}
-  if(hasArrival&&hasDeparture){btnArr.disabled=true;btnDep.disabled=true;btnLeave.disabled=true;return;}
-  if(hasArrival&&!hasDeparture){btnArr.disabled=true;btnLeave.disabled=true;btnDep.disabled=!open||!locationKnown;return;}
-  btnArr.disabled=!open||!locationKnown;btnDep.disabled=true;btnLeave.disabled=!open;
-}
-
-function attendanceOpenFallback(){
-  var now=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-  var total=now.getHours()*60+now.getMinutes();
-  return total>=CONFIG.WINDOW_START_MINUTES&&total<CONFIG.WINDOW_END_MINUTES;
-}
