@@ -3,38 +3,25 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b5f3a" />
-  <meta name="description" content="Teacher attendance for Rajiv Gandhi Memorial College of Education, Kathua. Mark Arrival, Departure and Leave." />
-  <title>Teacher Attendance | RGMCE Kathua</title>
+  <meta name="theme-color" content="#0b6b3a" />
+  <meta name="description" content="RGMCE Teacher Attendance - mark arrival and departure" />
+  <title>RGMCE Teacher Attendance</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
-
   <header class="site-header">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true"><img src="Images/Logo.png" alt=""></span>
-      <span class="brand-copy">
-        <span class="brand-name">RGMCE</span>
-        <span class="brand-place">Kathua</span>
-      </span>
-    </div>
-    <h1>Rajiv Gandhi Memorial College of Education Kathua</h1>
-    <p class="subtitle">Staff Attendance</p>
+    <h1>Rajiv Gandhi Memorial College of Education</h1>
+    <p class="subtitle">Teacher Attendance &middot; Kathua</p>
   </header>
 
-  <main id="main">
-    <section id="view-loading" class="card state-card" aria-live="polite">
-      <span class="spinner" aria-hidden="true"></span>
-      <p class="center" id="loading-text">Loading attendance&hellip;</p>
+  <main>
+    <section id="view-loading" class="card">
+      <p class="center" id="loading-text">Loading&hellip;</p>
     </section>
 
-    <section id="view-id" class="card hidden" aria-labelledby="id-heading">
-      <p class="eyebrow">Teacher access</p>
-      <h2 id="id-heading">Enter your Teacher ID</h2>
-      <p class="hint">Use the Teacher ID provided by the college office. It will be remembered on this device.</p>
+    <section id="view-id" class="card hidden">
+      <h2>Enter Teacher ID</h2>
       <form id="id-form" autocomplete="off">
-        <label class="field-label" for="teacher-id-input">Teacher ID</label>
         <input
           id="teacher-id-input"
           type="text"
@@ -42,41 +29,29 @@
           autocapitalize="characters"
           autocomplete="off"
           spellcheck="false"
-          aria-describedby="id-help"
           required
         />
-        <p class="field-help" id="id-help">Your Teacher ID is not displayed after confirmation.</p>
         <button type="submit" id="id-submit" class="btn btn-primary">Continue</button>
       </form>
     </section>
 
-    <section id="view-confirm" class="card hidden" aria-labelledby="confirm-heading">
-      <p class="eyebrow">Identity confirmation</p>
-      <h2 id="confirm-heading">Confirm your identity</h2>
+    <section id="view-confirm" class="card hidden">
+      <h2>Is this you?</h2>
       <div class="confirm-box">
-        <p class="confirm-label">Signing in as</p>
         <p class="confirm-name" id="confirm-name"></p>
       </div>
-      <p class="hint">For privacy, your Teacher ID will not be shown again.</p>
-      <button type="button" id="confirm-yes" class="btn btn-primary">Confirm and Continue</button>
-      <button type="button" id="confirm-no" class="btn btn-secondary">Use a Different Teacher ID</button>
+      <button id="confirm-yes" class="btn btn-primary">Yes, continue</button>
+      <button id="confirm-no" class="btn btn-secondary">No, change ID</button>
     </section>
 
-    <section id="view-home" class="card hidden" aria-labelledby="home-name">
+    <section id="view-home" class="card hidden">
       <div class="home-head">
-        <div>
-          <p class="eyebrow">Signed in</p>
-          <h2 class="home-name" id="home-name"></h2>
-          <p class="home-meta"><span id="home-date"></span></p>
-        </div>
-        <button type="button" id="btn-change" class="btn-link btn-change">Change</button>
+        <p class="home-name" id="home-name"></p>
+        <p class="home-meta"><span id="home-date"></span></p>
       </div>
 
-      <div class="status-card" id="status-card" aria-live="polite">
-        <div class="status-head">
-          <p class="status-label">Attendance Status</p>
-          <span class="window-chip" id="window-status"></span>
-        </div>
+      <div class="status-card" id="status-card">
+        <p class="status-label">Today&rsquo;s status</p>
         <p class="status-value" id="status-value">&mdash;</p>
         <dl class="status-grid">
           <div>
@@ -87,43 +62,31 @@
             <dt>Departure</dt>
             <dd id="departure-time">&mdash;</dd>
           </div>
+          <div>
+            <dt>Hours worked</dt>
+            <dd id="hours-worked">&mdash;</dd>
+          </div>
         </dl>
       </div>
 
-      <p class="action-note" id="action-note" aria-live="polite"></p>
+      <button id="btn-arrival" class="btn btn-arrival">MARK ARRIVAL</button>
+      <button id="btn-departure" class="btn btn-departure">MARK DEPARTURE</button>
+      <button id="btn-leave" class="btn btn-secondary">MARK LEAVE</button>
 
-      <div class="actions">
-        <button type="button" id="btn-arrival" class="btn btn-primary btn-action">Mark Arrival</button>
-        <button type="button" id="btn-departure" class="btn btn-primary btn-action">Mark Departure</button>
-        <button type="button" id="btn-leave" class="btn btn-secondary btn-action">Record Leave</button>
-      </div>
-
-      <button type="button" id="btn-retry-config" class="btn-link hidden">Retry location connection</button>
-      <button type="button" id="btn-reload-status" class="btn-link hidden">Retry status</button>
-
-      <p class="privacy-note">Location is used only to confirm you are on campus. Attendance is validated by the college server.</p>
+      <button id="btn-change" class="btn-link">Change Teacher ID</button>
     </section>
 
-    <section id="view-error" class="card hidden" aria-labelledby="error-heading">
-      <p class="eyebrow">Connection problem</p>
-      <h2 id="error-heading">Unable to load attendance</h2>
+    <section id="view-error" class="card hidden">
+      <h2>Something went wrong</h2>
       <p class="hint" id="error-text"></p>
-      <button type="button" id="btn-retry" class="btn btn-primary">Try Again</button>
-      <button type="button" id="btn-use-different" class="btn btn-secondary">Enter a Different Teacher ID</button>
+      <button id="btn-retry" class="btn btn-primary">Try again</button>
     </section>
-
-    <noscript>
-      <section class="card">
-        <h2>JavaScript is required</h2>
-        <p class="hint">Please enable JavaScript in your browser, then reload this page to mark attendance.</p>
-      </section>
-    </noscript>
   </main>
 
   <div id="message" class="message hidden" role="status" aria-live="polite"></div>
 
   <footer class="site-footer">
-    <p id="security-note">Your Teacher ID is stored only on this device and is never displayed after confirmation. Do not share your Teacher ID with others.</p>
+    <p id="security-note"></p>
   </footer>
 
   <script src="app.js"></script>
