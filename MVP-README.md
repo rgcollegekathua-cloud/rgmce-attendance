@@ -8,7 +8,8 @@ A tiny attendance app for Rajiv Gandhi Memorial College of Education, Kathua.
 - **Cost:** free tier only
 
 The older React/Firebase app still exists in `src/`, `functions/` and `dist/`.
-Nothing was deleted. The MVP is completely separate and does not use them.
+It is retained for reference and is not used or deployed by this MVP. Only
+`docs/` and `apps-script/` are needed for the live application.
 
 ## What it does
 
@@ -16,10 +17,15 @@ Nothing was deleted. The MVP is completely separate and does not use them.
 2. Backend checks the ID against the private Teachers sheet and returns the name.
 3. Teacher confirms the name. The ID is saved in the phone browser and is never
    shown on screen again.
-4. Three big buttons: **MARK ARRIVAL**, **MARK DEPARTURE** and **MARK LEAVE**.
+4. Three clear actions: **Mark Arrival**, **Mark Departure** and **Record Leave**.
+   A compact **Attendance Status** card and a line under it explain the current
+   state and the next permitted action.
 5. Tapping Arrival or Departure asks for one GPS reading, checks it is within the
    college radius (default 200 m), then sends the request. Leave needs no location.
-6. Apps Script writes the row in Google Sheets with a server-generated time
+6. Departure and Leave ask for confirmation before saving. While a request is
+   running, the buttons are disabled and the active action shows a progress label
+   so a double tap cannot submit twice.
+7. Apps Script writes the row in Google Sheets with a server-generated time
    (Asia/Kolkata). Duplicate arrival/departure/leave, departure-before-arrival,
    leave-after-attendance, attendance-after-leave, out-of-hours marking and
    inactive teachers are all rejected on the server.
@@ -49,7 +55,20 @@ come back at 8:00 AM the next day even if the page is left open.
 
 The college location comes from the server only. If it cannot be loaded there is
 no guessed fallback position: Arrival and Departure stay disabled with a clear
-message, while Leave keeps working because it needs no location.
+message and a **Retry location connection** button, while Leave keeps working
+because it needs no location.
+
+If today's attendance status cannot be loaded, all actions are paused and a
+**Retry status** button appears, so the app never guesses from stale data. The
+frontend uses the server's `date`, `serverTime` and `attendanceOpen` fields to
+restore the state after a refresh and to switch the buttons off at 3:00 PM even
+if the page is left open.
+
+Requests have a 25-second timeout. Network failures, slow responses and invalid
+server responses show a short, actionable message instead of a raw browser error.
+A successful action is never followed by a duplicate success/error notification;
+if the status refresh fails after a successful action, the success is kept and
+the status card offers a retry.
 
 ## Security limits of this MVP (please read)
 
@@ -95,14 +114,27 @@ as `On time` instead of failing.
 
 ## Local checks that were run
 
-- `node --check` on `docs/app.js` and `apps-script/Code.gs` — pass
-- `npm run test:appscript` — 55/55 pass (identify rules, arrival/departure/leave
+- `node --check docs/app.js` — pass
+- `node --check` on a temporary `.js` copy of `apps-script/Code.gs` — pass
+- `npm run test:appscript` — **61/61 pass** (identify rules, arrival/departure/leave
   creation and duplicates, out-of-hours rejection for all three actions,
   leave/attendance conflicts, late detection at the threshold, Date/ISO/serial
   thresholds, server-time state, Date-object rows, frontend button states,
-  status display and Teacher ID privacy)
-- Existing React project checks (`npm run typecheck`, `npm run lint`,
-  `npm run build`) still pass — they were not touched.
+  status display, next-action guidance, campus-location retry and Teacher ID
+  privacy)
+- `git diff --check` — clean (Git only reports expected CRLF line-ending warnings)
+- `npm run lint` — pass
+- `npm run typecheck` — pass
+- `npm run build` — pass; the legacy React/Firebase bundle still emits Vite's
+  large-chunk warning, which does not affect the `docs/` MVP
+- `npm run test:rules` — exits 0, but only checks that `firebase-tools` is
+  available; it does not run Firestore emulator tests
+- `npm test` (legacy React project) — **pre-existing failure**: no test files
+  found
+- `npm run test:functions` — **pre-existing failure**: no test files found
+
+The full Apps Script backend still needs a live deployment and a real phone test;
+local tests cannot prove the live Google Sheets integration works.
 
 ## Not yet tested (needs your Google account / a phone)
 

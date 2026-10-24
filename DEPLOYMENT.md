@@ -2,6 +2,22 @@
 
 Follow these steps in order. No coding is needed. Everything used here is free.
 
+## Updating an existing installation
+
+Always update in this order:
+
+1. **Back up the data.** In Google Sheets, use **File → Make a copy** and keep the
+   copy until the update has been tested. Do not edit the live `Attendance` or
+   `Leaves` sheets by hand during the update.
+2. **Update and verify the backend.** Copy the new `apps-script/Code.gs` into the
+   Apps Script editor, then create a new deployment version (Step 4). Test the
+   `config`, `identify` and `today` actions with a test Teacher ID.
+3. **Publish the frontend last.** Only after the backend is live and verified,
+   upload the new `docs/` files to GitHub Pages.
+
+If the frontend is published first, it may call actions or expect response fields
+that the old backend does not provide yet.
+
 ## Step 1 — Create the spreadsheet
 
 1. Go to <https://sheets.google.com> and sign in with the college Google account
@@ -69,9 +85,11 @@ only adds missing sheets and config rows, and it never touches the `Teachers` or
 ## Step 5 — Connect the frontend
 
 1. Open `docs/app.js` in this repository.
-2. Find the line `ENDPOINT: ""` near the top and paste your Web app URL:
+2. Find the `ENDPOINT` setting near the top and make sure it contains your Web
+   app URL:
    `ENDPOINT: "https://script.google.com/macros/s/..../exec"`
-3. Save the file.
+3. Save the file. This URL is public and is not a secret; the spreadsheet stays
+   private.
 
 ## Step 6 — Publish on GitHub Pages
 
@@ -89,18 +107,41 @@ only adds missing sheets and config rows, and it never touches the `Teachers` or
 ## Step 7 — Test on a real phone
 
 1. Open the GitHub Pages link on a phone.
-2. Enter one of the Teacher IDs you created → confirm the name.
+2. Enter one of the Teacher IDs you created, then confirm the name on the
+   identity screen.
 3. Stand on campus (or set the Config radius large for a first remote test),
-   tap **MARK ARRIVAL**, allow location access.
+   tap **Mark Arrival**, and allow location access.
 4. Check the spreadsheet — a new row should appear with today's date and time.
-5. Tap **MARK DEPARTURE** later and confirm the same row updates.
-6. Tap **MARK LEAVE** on a day you want to record a leave — no location needed,
-   but it also has to be done between 8:00 AM and 3:00 PM.
+   The app should show **Arrival marked successfully** and update the
+   **Attendance Status** card.
+5. Tap **Mark Departure** later and confirm the same row updates. The app asks
+   for confirmation first.
+6. Tap **Record Leave** on a day you want to record a leave — no location is
+   needed, but it also has to be done between 8:00 AM and 3:00 PM and is
+   confirmed before it is saved.
+7. Refresh the page. The saved Teacher ID should be verified again and today's
+   status should come back from the spreadsheet.
 
 The three buttons follow the college hours: before 8:00 AM and after 3:00 PM
 all three are switched off, and they come back the next morning. Once the
-arrival is marked, only **MARK DEPARTURE** stays available. An arrival after
-`LATE_AFTER` shows `Late` instead of `On time`.
+arrival is marked, only **Mark Departure** stays available. An arrival after
+`LATE_AFTER` shows `Late` instead of `On time`. A short note under the status
+card explains the next permitted action or why an action is unavailable.
+
+### If something goes wrong on the phone
+
+- **Location permission denied:** allow location access for the site in the
+  browser settings, then tap the action again.
+- **Outside campus or poor GPS accuracy:** move to an open area on campus and
+  try again. The message shows the approximate distance or accuracy.
+- **Campus location could not be loaded:** Mark Arrival and Mark Departure stay
+  disabled and a **Retry location connection** button appears. Record Leave
+  remains available inside college hours.
+- **Attendance status could not be loaded:** tap **Retry status**. Do not keep
+  tapping the action buttons; the server rejects duplicates in any case.
+- **Slow or failed request:** wait for the progress message to clear, check the
+  mobile data or Wi-Fi connection, and try once more. Never reload the page
+  repeatedly while a request is in progress.
 
 ## Ongoing tasks (the admin's routine)
 

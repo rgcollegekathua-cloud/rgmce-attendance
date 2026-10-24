@@ -1,5 +1,13 @@
 ﻿# RGMCE Teacher Attendance System
 
+> **Active application:** The live attendance app is the lightweight MVP in
+> `docs/` with the Google Apps Script backend in `apps-script/`. See
+> [`MVP-README.md`](MVP-README.md) and [`DEPLOYMENT.md`](DEPLOYMENT.md) for the
+> current setup and rules.
+>
+> The React/Firebase PWA described below is a legacy, separate implementation.
+> It is retained for reference and is not used by the `docs/` application.
+
 A PWA for Rajiv Gandhi Memorial College of Education, Kathua (J&K) to manage teacher attendance using QR scanning with server-enforced rules.
 
 ## Roles
@@ -32,9 +40,10 @@ npm run dev
 - `npm run build` - TypeScript build + Vite build
 - `npm run lint` - ESLint (zero warnings)
 - `npm run typecheck` - Root typecheck
-- `npm test` - Frontend tests (vitest)
-- `npm --prefix functions test` - Functions tests
+- `npm test` - Frontend tests (vitest; no test files are currently present)
+- `npm --prefix functions test` - Functions tests (no test files are currently present)
 - `npm run test:rules` - Firestore rules test script
+- `npm run test:appscript` - Local tests for the active MVP backend and frontend
 
 ## Firebase Configuration Required
 Create a Firebase project with:

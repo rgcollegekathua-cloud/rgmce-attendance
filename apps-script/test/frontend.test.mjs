@@ -17,7 +17,11 @@ function makeElement(id) {
     classList: {
       added: [],
       add(name) { this.added.push(name); },
-      remove() {}
+      remove() {},
+      toggle(name, force) {
+        if (force) this.added.push(name);
+        return !!force;
+      }
     }
   };
 }
@@ -30,7 +34,8 @@ function makeButtons() {
     "status-value": makeElement("status-value"),
     "arrival-time": makeElement("arrival-time"),
     "departure-time": makeElement("departure-time"),
-    "hours-worked": makeElement("hours-worked")
+    "action-note": makeElement("action-note"),
+    "window-status": makeElement("window-status")
   };
 }
 
@@ -231,46 +236,133 @@ test("server attendanceOpen is used instead of the device clock", () => {
   assert.equal(buttons["btn-departure"].disabled, false);
 });
 
-test("a late arrival is displayed as Late", () => {
+test("a marked arrival is displayed as Present", () => {
   const buttons = makeButtons();
   const ctx = loadApp(buttons);
   ctx.renderToday({
     arrivalTime: "10:30:00",
     departureTime: null,
     status: "Late",
-    hoursWorked: null,
     leave: false
   });
-  assert.equal(buttons["status-value"].textContent, "Late");
-  assert.ok(buttons["status-value"].classList.added.includes("late"));
-});
-
-test("an on-time arrival is displayed as On time", () => {
-  const buttons = makeButtons();
-  const ctx = loadApp(buttons);
-  ctx.renderToday({
-    arrivalTime: "09:00:00",
-    departureTime: null,
-    status: "On time",
-    hoursWorked: null,
-    leave: false
-  });
-  assert.equal(buttons["status-value"].textContent, "On time");
+  assert.equal(buttons["status-value"].textContent, "Present");
   assert.ok(buttons["status-value"].classList.added.includes("on-time"));
 });
 
-test("a finished day is displayed as Completed", () => {
+test("a finished day is still displayed as Present", () => {
   const buttons = makeButtons();
   const ctx = loadApp(buttons);
   ctx.renderToday({
     arrivalTime: "10:30:00",
     departureTime: "14:00:00",
     status: "Late",
-    hoursWorked: 3.5,
     leave: false
   });
-  assert.equal(buttons["status-value"].textContent, "Completed");
-  assert.equal(buttons["hours-worked"].textContent, "3.5 h");
+  assert.equal(buttons["status-value"].textContent, "Present");
+});
+
+test("arrival and departure times are shown as HH:MM AM/PM", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: "09:10:00",
+    departureTime: "1899-12-30T08:30:00.000Z",
+    leave: false
+  });
+  assert.equal(buttons["arrival-time"].textContent, "09:10 AM");
+  assert.match(buttons["departure-time"].textContent, /^\d{2}:\d{2} (AM|PM)$/);
+  assert.ok(!buttons["departure-time"].textContent.includes("1899"));
+});
+
+test("afternoon times are shown as PM", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: "14:05:00",
+    departureTime: null,
+    leave: false
+  });
+  assert.equal(buttons["arrival-time"].textContent, "02:05 PM");
+});
+
+test("a day with nothing marked is displayed as Not marked", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: null,
+    departureTime: null,
+    status: null,
+    hoursWorked: null,
+    leave: false
+  });
+  assert.equal(buttons["status-value"].textContent, "Not marked");
+});
+
+test("a recorded leave is displayed as Leave", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.renderToday({
+    arrivalTime: null,
+    departureTime: null,
+    status: null,
+    leave: true
+  });
+  assert.equal(buttons["status-value"].textContent, "Leave");
+});
+
+test("the next permitted action is explained before arrival", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.updateActionButtons({
+    marked: false,
+    arrivalTime: null,
+    departureTime: null,
+    leave: false,
+    attendanceOpen: true
+  });
+  assert.match(buttons["action-note"].textContent, /Mark Arrival to begin/i);
+});
+
+test("the next permitted action is explained after arrival", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.updateActionButtons({
+    marked: true,
+    arrivalTime: "09:10:00",
+    departureTime: null,
+    leave: false,
+    attendanceOpen: true
+  });
+  assert.match(buttons["action-note"].textContent, /Mark Departure/i);
+});
+
+test("the attendance window is explained when actions are closed", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.updateActionButtons({
+    marked: false,
+    arrivalTime: null,
+    departureTime: null,
+    leave: false,
+    attendanceOpen: false
+  });
+  assert.match(buttons["action-note"].textContent, /8:00 AM and 3:00 PM/);
+});
+
+test("a missing campus location explains how to retry", () => {
+  const buttons = makeButtons();
+  const ctx = loadApp(buttons);
+  ctx.state.configError = "Could not load the college location from the server.";
+  ctx.updateActionButtons({
+    marked: false,
+    arrivalTime: null,
+    departureTime: null,
+    leave: false,
+    attendanceOpen: true
+  });
+  assert.match(buttons["action-note"].textContent, /Campus location is unavailable/i);
+  assert.equal(buttons["btn-arrival"].disabled, true);
+  assert.equal(buttons["btn-leave"].disabled, false);
 });
 
 test("frontend never renders the teacher id after it is entered", () => {

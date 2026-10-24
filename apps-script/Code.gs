@@ -97,18 +97,26 @@ function handleIdentify_(payload) {
   if (!teacherId) return { ok: false, error: "Please enter your Teacher ID." };
 
   var teacher = findTeacher_(teacherId);
-  if (!teacher) return { ok: false, error: "Teacher ID not found. Check the ID and try again." };
-  if (!teacher.active) return { ok: false, error: "This Teacher ID is inactive. Contact the admin." };
+  if (!teacher) return { ok: false, code: "TEACHER_NOT_FOUND", error: "Teacher ID not found. Please check the ID and try again." };
+  if (!teacher.active) return { ok: false, code: "TEACHER_INACTIVE", error: "This Teacher ID is inactive. Please contact the college administrator." };
 
   return { ok: true, teacherId: teacher.teacherId, name: teacher.name };
 }
 
+function formatTimeForResponse_(val) {
+  if (val === "" || val == null) return null;
+  if (Object.prototype.toString.call(val) === "[object Date]" && !isNaN(val.getTime())) {
+    return Utilities.formatDate(val, TIMEZONE, "HH:mm:ss");
+  }
+  return String(val).trim();
+}
+
 function handleToday_(payload) {
   var teacherId = normalizeId_(payload.teacherId);
-  if (!teacherId) return { ok: false, error: "Missing Teacher ID." };
+  if (!teacherId) return { ok: false, error: "Please enter your Teacher ID." };
 
   var teacher = findTeacher_(teacherId);
-  if (!teacher || !teacher.active) return { ok: false, error: "This Teacher ID is not active." };
+  if (!teacher || !teacher.active) return { ok: false, error: "This Teacher ID is inactive. Please contact the college administrator." };
 
   var sheet = attendanceSheet_();
   var today = todayStr_();
@@ -138,6 +146,7 @@ function handleToday_(payload) {
   }
   var values = row >= 0 ? sheet.getRange(row, 1, 1, HEADERS_ATTENDANCE.length).getValues()[0] : null;
   var arrT = values ? emptyToNull_(values[3]) : null;
+  var depT = values ? emptyToNull_(values[4]) : null;
   return {
     ok: true,
     marked: arrT ? true : false,
@@ -145,8 +154,8 @@ function handleToday_(payload) {
     date: serverState.date,
     serverTime: serverState.serverTime,
     attendanceOpen: serverState.attendanceOpen,
-    arrivalTime: arrT,
-    departureTime: values ? emptyToNull_(values[4]) : null,
+    arrivalTime: arrT ? formatTimeForResponse_(arrT) : null,
+    departureTime: depT ? formatTimeForResponse_(depT) : null,
     status: values ? emptyToNull_(values[9]) : null,
     hoursWorked: values ? emptyToNull_(values[10]) : null
   };
@@ -155,57 +164,54 @@ function handleToday_(payload) {
 function handleMark_(payload) {
   var teacherId = normalizeId_(payload.teacherId);
   var type = String(payload.type || "").toLowerCase();
-  if (!teacherId) return { ok: false, error: "Missing Teacher ID." };
+  if (!teacherId) return { ok: false, error: "Please enter your Teacher ID." };
   if (type !== "arrival" && type !== "departure") return { ok: false, error: "Invalid mark type." };
 
   var coords = validateCoords_(payload.lat, payload.lng);
-  if (!coords) return { ok: false, error: "Invalid location reading. Try again." };
+  if (!coords) return { ok: false, error: "Unable to verify your location reading. Please try again." };
 
   var teacher = findTeacher_(teacherId);
-  if (!teacher) return { ok: false, error: "Teacher ID not found." };
-  if (!teacher.active) return { ok: false, error: "This Teacher ID is inactive. Contact the admin." };
+  if (!teacher) return { ok: false, error: "Teacher ID not found. Please check the ID and try again." };
+  if (!teacher.active) return { ok: false, error: "This Teacher ID is inactive. Please contact the college administrator." };
 
   var sheet = attendanceSheet_();
   var leaveSheet = leaveSheet_();
   var today = todayStr_();
   if (findLeaveRow_(leaveSheet, teacherId, today) >= 0) {
-    return { ok: false, error: "Leave has already been recorded for today." };
+    return { ok: false, error: "Your Leave has already been recorded for today." };
   }
   var now = new Date();
   var timeStr = Utilities.formatDate(now, TIMEZONE, FMT_TIME);
   if (!isWithinAllowedHours_(now)) {
-    return { ok: false, error: "Attendance can only be marked between 8:00 AM and 3:00 PM IST." };
+    return { ok: false, error: "Attendance can be marked between 8:00 AM and 3:00 PM IST." };
   }
   var row = findAttendanceRow_(sheet, teacherId, today);
 
   if (type === "arrival") {
-    var cfg = readConfig_();
     if (row > 0) {
       var existingArr = sheet.getRange(row, 4).getValue();
       if (emptyToNull_(existingArr)) {
-        return { ok: false, error: "Arrival is already marked for today at " + existingArr + "." };
+        return { ok: false, error: "Your Check-in has already been recorded for today at " + existingArr + "." };
       }
       sheet.getRange(row, 4).setValue(timeStr);
       sheet.getRange(row, 6).setValue(coords.lat);
       sheet.getRange(row, 7).setValue(coords.lng);
-      sheet.getRange(row, 10).setValue(statusFor_(timeStr, cfg.LATE_AFTER));
+      sheet.getRange(row, 10).setValue("Present");
       return { ok: true, type: "arrival", time: timeStr, date: today };
     }
-    var statusArr = statusFor_(timeStr, cfg.LATE_AFTER);
     sheet.appendRow([
       teacher.teacherId, teacher.name, today, timeStr, "",
-      coords.lat, coords.lng, "", "", statusArr, ""
+      coords.lat, coords.lng, "", "", "Present", ""
     ]);
     return { ok: true, type: "arrival", time: timeStr, date: today };
   }
 
   if (row < 0) {
-    return { ok: false, error: "Arrival has not been marked today. Mark arrival first." };
+    return { ok: false, error: "Your Check-in has not been recorded today. Please check in first." };
   }
   var valuesDep = sheet.getRange(row, 1, 1, HEADERS_ATTENDANCE.length).getValues()[0];
   var arrivalTimeDep = emptyToNull_(valuesDep[3]);
   if (!arrivalTimeDep) {
-    // Try to find again in case of timing
     row = findAttendanceRow_(sheet, teacherId, today);
     if (row >= 0) {
       valuesDep = sheet.getRange(row, 1, 1, HEADERS_ATTENDANCE.length).getValues()[0];
@@ -213,10 +219,10 @@ function handleMark_(payload) {
     }
   }
   if (!arrivalTimeDep) {
-    return { ok: false, error: "Arrival has not been marked today. Mark arrival first." };
+    return { ok: false, error: "Your Check-in has not been recorded today. Please check in first." };
   }
   if (emptyToNull_(valuesDep[4])) {
-    return { ok: false, error: "Departure is already marked for today at " + valuesDep[4] + "." };
+    return { ok: false, error: "Your Check-out has already been recorded for today at " + valuesDep[4] + "." };
   }
 
   var hoursDep = hoursBetween_(arrivalTimeDep, timeStr);
@@ -229,11 +235,11 @@ function handleMark_(payload) {
 
 function handleLeave_(payload) {
   var teacherId = normalizeId_(payload.teacherId);
-  if (!teacherId) return { ok: false, error: "Missing Teacher ID." };
+  if (!teacherId) return { ok: false, error: "Please enter your Teacher ID." };
 
   var teacher = findTeacher_(teacherId);
-  if (!teacher) return { ok: false, error: "Teacher ID not found." };
-  if (!teacher.active) return { ok: false, error: "This Teacher ID is inactive. Contact the admin." };
+  if (!teacher) return { ok: false, error: "Teacher ID not found. Please check the ID and try again." };
+  if (!teacher.active) return { ok: false, error: "This Teacher ID is inactive. Please contact the college administrator." };
 
   var sheet = attendanceSheet_();
   var leaveSheet = leaveSheet_();
@@ -243,13 +249,13 @@ function handleLeave_(payload) {
     return { ok: false, error: "Leave has already been recorded for today." };
   }
   if (!isWithinAllowedHours_(now)) {
-    return { ok: false, error: "Leave can only be marked between 8:00 AM and 3:00 PM IST." };
+    return { ok: false, error: "Leave can be recorded between 8:00 AM and 3:00 PM IST." };
   }
   var attRow = findAttendanceRow_(sheet, teacherId, today);
   if (attRow >= 0) {
     var valuesL = sheet.getRange(attRow, 1, 1, HEADERS_ATTENDANCE.length).getValues()[0];
     if (emptyToNull_(valuesL[3]) || emptyToNull_(valuesL[4])) {
-      return { ok: false, error: "Cannot mark leave after arrival or departure has been recorded for today." };
+      return { ok: false, error: "Leave cannot be recorded after Check-in or Check-out has been marked today." };
     }
   }
   var timeStr = Utilities.formatDate(now, TIMEZONE, FMT_TIME);
@@ -267,6 +273,10 @@ function handleLeave_(payload) {
       }
     }
     leaveSheet.appendRow([teacher.teacherId, teacher.name, today, timeStr, markedAt]);
+  }
+  // Set attendance status to Leave if row exists or ensure sheet shows Leave
+  if (attRow >= 0) {
+    sheet.getRange(attRow, 10).setValue("Leave");
   }
   return { ok: true, type: "leave", time: timeStr, date: today };
 }
@@ -533,5 +543,105 @@ function parsePayload_(e) {
     return raw ? JSON.parse(raw) : {};
   } catch (err) {
     throw new Error("Invalid request body.");
+  }
+}
+
+
+/**
+ * Creates a time-driven trigger to automatically mark teachers as Leave
+ * if they haven't marked arrival/departure by 3:00 PM.
+ * Run this once from the Apps Script editor after setup().
+ */
+function createAutoLeaveTrigger() {
+  // Remove existing triggers for this function
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "autoMarkAbsentAsLeave") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  // Create trigger at 3:00 PM IST daily
+  ScriptApp.newTrigger("autoMarkAbsentAsLeave")
+    .timeBased()
+    .everyDays(1)
+    .atHour(15)
+    .nearMinute(1)
+    .inTimezone(TIMEZONE)
+    .create();
+  return "Auto-leave trigger created for 3:01 PM IST daily.";
+}
+
+/**
+ * Automatically marks active teachers as Leave if they have no attendance
+ * and no leave record for today. Run by time-driven trigger.
+ */
+function autoMarkAbsentAsLeave() {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(LOCK_WAIT_MS);
+  } catch (err) {
+    return;
+  }
+  try {
+    var now = new Date();
+    // Only auto-mark leave if it's after 3:00 PM IST
+    if (isWithinAllowedHours_(now)) {
+      return;
+    }
+
+    var teachersSheet = teachersSheet_();
+    if (!teachersSheet) return;
+    var lastT = teachersSheet.getLastRow();
+    if (lastT < 2) return;
+
+    var attendanceSheet = attendanceSheet_();
+    var leaveSheet = leaveSheet_();
+    var today = todayStr_();
+    var timeStr = Utilities.formatDate(now, TIMEZONE, FMT_TIME);
+    var markedAt = Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm:ss");
+
+    var teacherRows = teachersSheet.getRange(2, 1, lastT - 1, HEADERS_TEACHERS.length).getValues();
+    for (var i = 0; i < teacherRows.length; i++) {
+      var t = teacherRows[i];
+      var teacherId = normalizeId_(t[0]);
+      if (!teacherId) continue;
+      if (!isActive_(t[2])) continue;
+
+      // Skip if already on leave
+      if (findLeaveRow_(leaveSheet, teacherId, today) >= 0) continue;
+
+      // Skip if they have marked arrival (and/or departure) - don't mark as leave
+      var attRow = findAttendanceRow_(attendanceSheet, teacherId, today);
+      if (attRow >= 0) {
+        var values = attendanceSheet.getRange(attRow, 1, 1, HEADERS_ATTENDANCE.length).getValues()[0];
+        if (emptyToNull_(values[3]) || emptyToNull_(values[4])) {
+          continue;
+        }
+        // Has attendance row but no arrival/departure - treat as absent, mark leave
+        var teacherName2 = String(t[1] || "").trim();
+        try {
+          leaveSheet.appendRow([teacherId, teacherName2, today, timeStr, markedAt]);
+        } catch (e) {
+          leaveSheet = leaveSheet_();
+          leaveSheet.appendRow([teacherId, teacherName2, today, timeStr, markedAt]);
+        }
+        continue;
+      }
+
+      // No attendance record and no leave - mark as leave
+      var teacherName = String(t[1] || "").trim();
+      try {
+        leaveSheet.appendRow([teacherId, teacherName, today, timeStr, markedAt]);
+      } catch (e) {
+        leaveSheet = leaveSheet_();
+        leaveSheet.appendRow([teacherId, teacherName, today, timeStr, markedAt]);
+      }
+      // If attendance row exists, mark status as Leave
+      if (attRow >= 0) {
+        attendanceSheet.getRange(attRow, 10).setValue("Leave");
+      }
+    }
+  } finally {
+    try { lock.releaseLock(); } catch (ignore) {}
   }
 }

@@ -314,7 +314,7 @@ test("duplicate arrival is rejected and original time is kept", () => {
   call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
   const second = call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
   assert.equal(second.ok, false);
-  assert.match(second.error, /already marked/i);
+  assert.match(second.error, /already been recorded/i);
   assert.equal(ctx._sheets.Attendance.data.length, 2);
   assert.equal(ctx._sheets.Attendance.data[1][3], "08:59:30");
 });
@@ -430,7 +430,7 @@ test("departure without arrival is rejected", () => {
   const ctx = fresh();
   const res = call(ctx, { action: "mark", teacherId: "T003", type: "departure", lat: 32.7, lng: 75.3 });
   assert.equal(res.ok, false);
-  assert.match(res.error, /arrival has not been marked/i);
+  assert.match(res.error, /arrival has not been recorded/i);
 });
 
 test("duplicate departure is rejected", () => {
@@ -439,7 +439,7 @@ test("duplicate departure is rejected", () => {
   call(ctx, { action: "mark", teacherId: "T001", type: "departure", lat: 32.7, lng: 75.3 });
   const again = call(ctx, { action: "mark", teacherId: "T001", type: "departure", lat: 32.7, lng: 75.3 });
   assert.equal(again.ok, false);
-  assert.match(again.error, /already marked/i);
+  assert.match(again.error, /already been recorded/i);
 });
 
 test("inactive teacher cannot mark attendance", () => {
@@ -548,7 +548,7 @@ test("leave is rejected when attendance already exists", () => {
   call(ctx, { action: "mark", teacherId: "T001", type: "arrival", lat: 32.7, lng: 75.3 });
   const res = call(ctx, { action: "leave", teacherId: "T001" });
   assert.equal(res.ok, false);
-  assert.match(res.error, /cannot mark leave after arrival or departure/i);
+  assert.match(res.error, /cannot be recorded after arrival or departure/i);
 });
 
 test("attendance is rejected when leave was already recorded", () => {
