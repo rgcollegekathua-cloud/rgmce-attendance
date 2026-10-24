@@ -56,14 +56,15 @@ function showMessage(text, kind) {
 
 function setBusy(busy) {
   state.busy = busy;
-  if ($("btn-arrival")) {
-    $("btn-arrival").textContent = busy ? "WORKING..." : "MARK ARRIVAL";
-  }
-  if ($("btn-departure")) {
-    $("btn-departure").textContent = busy ? "WORKING..." : "MARK DEPARTURE";
-  }
-  if ($("btn-leave")) {
-    $("btn-leave").textContent = busy ? "WORKING..." : "MARK LEAVE";
+  var btnArr = $("btn-arrival");
+  var btnDep = $("btn-departure");
+  var btnLeave = $("btn-leave");
+  if (busy) {
+    if (btnArr) btnArr.disabled = true;
+    if (btnDep) btnDep.disabled = true;
+    if (btnLeave) btnLeave.disabled = true;
+  } else {
+    updateActionButtons(state.todayData);
   }
 }
 
@@ -211,33 +212,65 @@ function startClockWatcher() {
   }, CONFIG.REFRESH_MS);
 }
 
+function formatTimeToAmPm(timeStr) {
+  if (!timeStr) return "-";
+  var s = String(timeStr).trim();
+  // Handle ISO timestamp like 1899-12-30T03:58:41.000Z (Sheets time stored as Date)
+  var iso = /^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
+  if (iso) {
+    var h = parseInt(iso[1], 10);
+    var min = iso[2];
+    var sec = iso[3] ? parseInt(iso[3], 10) : 0;
+    // If it's Zulu time or from 1899 sentinel, convert to IST (+05:30)
+    if (s.indexOf('Z') !== -1 || s.indexOf('+') !== -1 || s.indexOf('-') !== -1 && s.indexOf('T') !== -1) {
+      var totalMinutes = h * 60 + parseInt(min, 10) + sec / 60;
+      totalMinutes = totalMinutes + 330; // +5:30 for IST
+      totalMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+      h = Math.floor(totalMinutes / 60);
+      min = String(Math.round(totalMinutes % 60)).padStart(2, '0');
+    }
+    var ampm = h >= 12 ? "PM" : "AM";
+    var h12 = h % 12;
+    if (h12 === 0) h12 = 12;
+    return h12 + ":" + String(min).padStart(2, '0') + " " + ampm;
+  }
+  var m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(s);
+  if (!m) return s;
+  var hh = parseInt(m[1], 10);
+  var mm = m[2];
+  var ampm2 = hh >= 12 ? "PM" : "AM";
+  var h122 = hh % 12;
+  if (h122 === 0) h122 = 12;
+  return h122 + ":" + String(mm).padStart(2, '0') + " " + ampm2;
+}
+
 function renderToday(data){
   var statusValue=document.getElementById('status-value');
   statusValue.className='status-value';
   var arrivalEl=document.getElementById('arrival-time');
   var departureEl=document.getElementById('departure-time');
-  var hoursEl=document.getElementById('hours-worked');
-  if(data.leave){
+  if(data.leave || (data.status && String(data.status).toLowerCase() === 'leave')){
     statusValue.textContent='Leave';
     statusValue.classList.add('done');
     arrivalEl.textContent='-';
     departureEl.textContent='-';
-    hoursEl.textContent='-';
     return;
   }
   if(!data.arrivalTime){
-    statusValue.textContent='Not marked yet';
+    statusValue.textContent='Not Marked';
     arrivalEl.textContent='-';
     departureEl.textContent='-';
-    hoursEl.textContent='-';
     return;
   }
-  arrivalEl.textContent=data.arrivalTime||'-';
-  departureEl.textContent=data.departureTime||'-';
-  hoursEl.textContent=(data.hoursWorked!=null&&data.hoursWorked!=='')?data.hoursWorked+' h':'-';
-  if(data.departureTime){statusValue.textContent='Completed';statusValue.classList.add('done');}
-  else if(data.status==='Late'){statusValue.textContent='Late';statusValue.classList.add('late');}
-  else{statusValue.textContent='On time';statusValue.classList.add('on-time');}
+  arrivalEl.textContent=formatTimeToAmPm(data.arrivalTime)||'-';
+  departureEl.textContent=formatTimeToAmPm(data.departureTime)||'-';
+  if(data.departureTime){
+    statusValue.textContent='Present';
+    statusValue.classList.add('done');
+  } else {
+    statusValue.textContent='Present';
+    statusValue.classList.add('on-time');
+  }
 }
 
 
@@ -319,11 +352,16 @@ function checkLocation(coords) {
 function markAttendance(type) {
   if (state.busy || !state.teacher) return;
   if (type === "departure") {
-    if (!confirm("Are you sure you want to mark your departure?")) {
+    if (!confirm("Are you sure you want to check out now?")) {
+      return;
+    }
+  } else if (type === "arrival") {
+    if (!confirm("Are you sure you want to check in now?")) {
       return;
     }
   }
-  setBusy(true);
+  state.busy = true;
+  updateActionButtons(state.todayData);
   showMessage("Getting your location...", "info");
 
   loadServerConfig()
@@ -340,27 +378,28 @@ function markAttendance(type) {
       });
     })
     .then(function (data) {
-      var label = type === "arrival" ? "Arrival" : "Departure";
-      showMessage(label + " recorded at " + (data.time || "") + ".", "success");
+      var label = type === "arrival" ? "Check-in" : "Check-out";
+      showMessage(label + " recorded at " + formatTimeToAmPm(data.time) + ".", "success");
       return loadToday();
     })
     .catch(function (err) {
       showMessage(err.message, "error");
-      updateActionButtons(state.todayData);
       return null;
     })
     .then(function () {
-      setBusy(false);
+      state.busy = false;
+      updateActionButtons(state.todayData);
     });
 }
 
 function markLeave() {
   if (state.busy || !state.teacher) return;
   if (!confirm("Are you sure you want to mark leave for today?")) return;
-  setBusy(true);
+  state.busy = true;
+  updateActionButtons(state.todayData);
   callBackend({ action: "leave", teacherId: state.teacher.teacherId })
     .then(function (data) {
-      showMessage("Leave recorded at " + (data.time || "") + ".", "success");
+      showMessage("Leave recorded at " + formatTimeToAmPm(data.time) + ".", "success");
       return loadToday();
     })
     .catch(function (err) {
@@ -368,7 +407,8 @@ function markLeave() {
       return null;
     })
     .then(function () {
-      setBusy(false);
+      state.busy = false;
+      updateActionButtons(state.todayData);
     });
 }
 
@@ -502,12 +542,16 @@ function updateActionButtons(data){
   var btnDep=document.getElementById('btn-departure');
   var btnLeave=document.getElementById('btn-leave');
   if(!btnArr||!btnDep||!btnLeave)return;
+  if (state.busy) {
+    btnArr.disabled = true;
+    btnDep.disabled = true;
+    btnLeave.disabled = true;
+    return;
+  }
   var d=data||{};
   var open=isAttendanceOpenNow(d);
   var hasArrival=!!(d.arrivalTime&&String(d.arrivalTime).trim());
   var hasDeparture=!!(d.departureTime&&String(d.departureTime).trim());
-  // Arrival and Departure need a GPS reading, so they stay off while the
-  // college location is unknown. Leave needs neither.
   var locationKnown=!state.configError;
   if(d.leave){btnArr.disabled=true;btnDep.disabled=true;btnLeave.disabled=true;return;}
   if(hasArrival&&hasDeparture){btnArr.disabled=true;btnDep.disabled=true;btnLeave.disabled=true;return;}

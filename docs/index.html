@@ -4,14 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0b6b3a" />
-  <meta name="description" content="RGMCE Teacher Attendance - mark arrival and departure" />
+  <meta name="description" content="RGMCE Teacher Attendance System" />
   <title>RGMCE Teacher Attendance</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="site-header">
+    <img src="Images/Logo.png" alt="RGMCE Logo" class="site-logo" onerror="this.style.display='none'" />
     <h1>Rajiv Gandhi Memorial College of Education</h1>
-    <p class="subtitle">Teacher Attendance &middot; Kathua</p>
+    <p class="subtitle">Teacher Attendance System &middot; Kathua</p>
   </header>
 
   <main>
@@ -20,7 +21,8 @@
     </section>
 
     <section id="view-id" class="card hidden">
-      <h2>Enter Teacher ID</h2>
+      <h2>Teacher Login</h2>
+      <p class="hint">Please enter your Teacher ID to continue</p>
       <form id="id-form" autocomplete="off">
         <input
           id="teacher-id-input"
@@ -30,18 +32,19 @@
           autocomplete="off"
           spellcheck="false"
           required
+          placeholder="e.g. T001"
         />
         <button type="submit" id="id-submit" class="btn btn-primary">Continue</button>
       </form>
     </section>
 
     <section id="view-confirm" class="card hidden">
-      <h2>Is this you?</h2>
+      <h2>Confirm Identity</h2>
       <div class="confirm-box">
         <p class="confirm-name" id="confirm-name"></p>
       </div>
-      <button id="confirm-yes" class="btn btn-primary">Yes, continue</button>
-      <button id="confirm-no" class="btn btn-secondary">No, change ID</button>
+      <button id="confirm-yes" class="btn btn-primary">Confirm & Continue</button>
+      <button id="confirm-no" class="btn btn-secondary">Change ID</button>
     </section>
 
     <section id="view-home" class="card hidden">
@@ -51,26 +54,22 @@
       </div>
 
       <div class="status-card" id="status-card">
-        <p class="status-label">Today&rsquo;s status</p>
+        <p class="status-label">Attendance Status</p>
         <p class="status-value" id="status-value">&mdash;</p>
         <dl class="status-grid">
           <div>
-            <dt>Arrival</dt>
+            <dt>Check-in Time</dt>
             <dd id="arrival-time">&mdash;</dd>
           </div>
           <div>
-            <dt>Departure</dt>
+            <dt>Check-out Time</dt>
             <dd id="departure-time">&mdash;</dd>
-          </div>
-          <div>
-            <dt>Hours worked</dt>
-            <dd id="hours-worked">&mdash;</dd>
           </div>
         </dl>
       </div>
 
-      <button id="btn-arrival" class="btn btn-arrival">MARK ARRIVAL</button>
-      <button id="btn-departure" class="btn btn-departure">MARK DEPARTURE</button>
+      <button id="btn-arrival" class="btn btn-arrival">CHECK IN</button>
+      <button id="btn-departure" class="btn btn-departure">CHECK OUT</button>
       <button id="btn-leave" class="btn btn-secondary">MARK LEAVE</button>
 
       <button id="btn-change" class="btn-link">Change Teacher ID</button>
