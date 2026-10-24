@@ -1,15 +1,9 @@
 # dependencies
 node_modules/
 
-# build output
-dist/
-functions/lib/
-*.tsbuildinfo
-
 # secrets / local env (never publish)
 .env
 .env.*
-!.env.example
 
 # editors / OS
 .DS_Store

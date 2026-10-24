@@ -54,10 +54,6 @@ that the old backend does not provide yet.
      the first number is latitude, the second is longitude.
    - `RADIUS_M` — how far from the campus centre a teacher may stand (200 m).
    - `MAX_ACCURACY_M` — how precise the phone's GPS must be (250 m).
-   - `LATE_AFTER` — arrival after this time is marked `Late` (default `10:00`).
-     Type it as `10:00`; Sheets may turn it into a time value, which the backend
-     also understands. If the cell ends up holding an odd date (a `1899-12-30`
-     value), select it and retype `10:00`.
 
 ## Step 4 — Publish the web app
 
@@ -94,8 +90,7 @@ only adds missing sheets and config rows, and it never touches the `Teachers` or
 ## Step 6 — Publish on GitHub Pages
 
 1. Create a free GitHub account / repository (e.g. `rgmce-attendance`) and upload
-   this project folder. Do **not** upload `node_modules` or the old `dist`/`src`
-   Firebase app if you want a small repo — only `docs/` and `apps-script/` are needed.
+   this project folder. Only `docs/` and `apps-script/` are needed for the live app.
 2. On GitHub, open the repository → **Settings** → **Pages**.
 3. Source: **Deploy from a branch**. Branch: `main`, folder: **`/docs`**. Save.
 4. Wait 2 minutes. Your app is now at:
@@ -110,23 +105,24 @@ only adds missing sheets and config rows, and it never touches the `Teachers` or
 2. Enter one of the Teacher IDs you created, then confirm the name on the
    identity screen.
 3. Stand on campus (or set the Config radius large for a first remote test),
-   tap **Mark Arrival**, and allow location access.
+   tap **Check In**, and allow location access.
 4. Check the spreadsheet — a new row should appear with today's date and time.
-   The app should show **Arrival marked successfully** and update the
-   **Attendance Status** card.
-5. Tap **Mark Departure** later and confirm the same row updates. The app asks
-   for confirmation first.
-6. Tap **Record Leave** on a day you want to record a leave — no location is
+   The app should show **Check-in recorded** and update the **Attendance Status**
+   card to **Present**.
+5. Tap **Check Out** later and confirm the same row updates. The app asks for
+   confirmation first.
+6. Tap **Mark Leave** on a day you want to record a leave — no location is
    needed, but it also has to be done between 8:00 AM and 3:00 PM and is
    confirmed before it is saved.
 7. Refresh the page. The saved Teacher ID should be verified again and today's
    status should come back from the spreadsheet.
 
 The three buttons follow the college hours: before 8:00 AM and after 3:00 PM
-all three are switched off, and they come back the next morning. Once the
-arrival is marked, only **Mark Departure** stays available. An arrival after
-`LATE_AFTER` shows `Late` instead of `On time`. A short note under the status
+all three are switched off, and they come back the next morning. Once check-in
+is recorded, only **Check Out** stays available. A short note under the status
 card explains the next permitted action or why an action is unavailable.
+Teachers who have no check-in and no leave by 3:00 PM are automatically marked
+**Leave** by the scheduled Apps Script trigger.
 
 ### If something goes wrong on the phone
 
@@ -134,9 +130,9 @@ card explains the next permitted action or why an action is unavailable.
   browser settings, then tap the action again.
 - **Outside campus or poor GPS accuracy:** move to an open area on campus and
   try again. The message shows the approximate distance or accuracy.
-- **Campus location could not be loaded:** Mark Arrival and Mark Departure stay
-  disabled and a **Retry location connection** button appears. Record Leave
-  remains available inside college hours.
+- **Campus location could not be loaded:** Check In and Check Out stay disabled
+  and a **Retry location connection** button appears. Mark Leave remains
+  available inside college hours.
 - **Attendance status could not be loaded:** tap **Retry status**. Do not keep
   tapping the action buttons; the server rejects duplicates in any case.
 - **Slow or failed request:** wait for the progress message to clear, check the
